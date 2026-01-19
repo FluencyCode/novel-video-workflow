@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"novel-video-workflow/pkg/broadcast"
 	"novel-video-workflow/pkg/capcut"
+	"novel-video-workflow/pkg/database"
 	"novel-video-workflow/pkg/tools/aegisub"
 	"novel-video-workflow/pkg/tools/file"
 	"novel-video-workflow/pkg/tools/indextts2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,8 +64,8 @@ func startMCPServer() error {
 		return fmt.Errorf("创建工作流处理器失败: %v", err)
 	}
 
-	// 创建MCP服务器
-	server, err := mcp_pkg.NewServer(processor, logger)
+	// 创建MCP服务器，使用当前全局样式
+	server, err := mcp_pkg.NewServerWithGlobalStyle(processor, logger, GlobalStyle)
 	if err != nil {
 		return fmt.Errorf("创建MCP服务器失败: %v", err)
 	}
@@ -423,11 +425,11 @@ func apiExecuteHandler(c *gin.Context) {
 						broadcastLogger := NewBroadcastLoggerAdapter(toolName, encoder, writeSyncer)
 						broadcaster := zap.New(broadcastLogger)
 
-						// 使用带广播功能的日志记录器创建章节图像生成器
-						generator := drawthings.NewChapterImageGenerator(broadcaster)
+						// 使用带广播功能的日志记录器创建章节图像生成器，使用当前全局样式
+						generator := drawthings.NewChapterImageGeneratorWithStyle(broadcaster, database.DB, GlobalStyle)
 
 						// 直接调用图像生成方法，而不是通过MCP处理器
-						results, err := generator.GenerateImagesFromChapter(chapterText, outputDir, width, height, true)
+						results, err := generator.GenerateImagesFromChapter(chapterText, outputDir, width, height, false)
 						if err != nil {
 							return
 						}
@@ -1113,11 +1115,25 @@ func webServerMain() {
 	r.PUT("/api/scenes/:sceneId", projectAPI.UpdateScene)
 	r.DELETE("/api/scenes/:sceneId", projectAPI.DeleteScene)
 
+	// 提示词模板相关路由
+	promptTemplateAPI := api_pkg.NewPromptTemplateAPI(mcpServerInstance.GetProcessor())
+	r.GET("/api/prompt-templates", promptTemplateAPI.GetPromptTemplates)
+	r.GET("/api/prompt-templates/:id", promptTemplateAPI.GetPromptTemplateByID)
+	r.GET("/api/prompt-templates/category/:category", promptTemplateAPI.GetPromptTemplatesByCategory)
+	r.POST("/api/prompt-templates", promptTemplateAPI.CreatePromptTemplate)
+	r.PUT("/api/prompt-templates/:id", promptTemplateAPI.UpdatePromptTemplate)
+	r.DELETE("/api/prompt-templates/:id", promptTemplateAPI.DeletePromptTemplate)
+
 	// 添加文件管理API端点
 	r.GET("/api/files/list", fileListHandler)
 	r.GET("/api/files/content", fileContentHandler)
 	r.DELETE("/api/files/delete", fileDeleteHandler)
 	r.POST("/api/files/upload", fileUploadHandler)
+
+	// 添加设置API端点
+	r.POST("/api/settings", settingsHandler)
+	// 添加调试API端点，用于检查全局变量
+	r.GET("/api/debug/global-style", debugGlobalStyleHandler)
 
 	// 添加静态文件服务，用于提供input和output目录的文件访问
 	// 使用项目根路径确保正确访问input和output目录
@@ -1170,8 +1186,8 @@ type WorkflowProcessor struct {
 	drawThingsGen *drawthings.ChapterImageGenerator
 }
 
-var GlobalStyle = "悬疑惊悚风格，周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
-var AdditionalPrompt = ", 周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
+var GlobalStyle = drawthings.DefaultSuspenseStyle
+var AdditionalPrompt = ", " + drawthings.DefaultSuspenseStyle
 
 // generateImagesWithOllamaPrompts 使用Ollama优化的提示词生成图像
 func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir string, chapterNum int, audioDurationSecs int) error {
@@ -1215,7 +1231,7 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 
 			imageFile := filepath.Join(imagesDir, fmt.Sprintf("paragraph_%02d.png", idx+1))
 
-			err = wp.drawThingsGen.Client.GenerateImageFromText(
+			err = wp.drawThingsGen.Client.GenerateImageFromTextWithDefaultTemplate(
 				optimizedPrompt,
 				imageFile,
 				512,   // 缩小宽度
@@ -1239,7 +1255,7 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 		imageFile := filepath.Join(imagesDir, fmt.Sprintf("scene_%02d.png", idx+1))
 
 		// 使用分镜描述生成图像
-		err = wp.drawThingsGen.Client.GenerateImageFromText(
+		err = wp.drawThingsGen.Client.GenerateImageFromTextWithDefaultTemplate(
 			sceneDesc,
 			imageFile,
 			512,   // 缩小宽度
@@ -1335,6 +1351,41 @@ func min(a, b int) int {
 
 // 一键出片功能 - 完整工作流处理
 func oneClickFilmHandler(c *gin.Context) {
+	var reqBody map[string]interface{}
+	err := json.NewDecoder(c.Request.Body).Decode(&reqBody)
+	if err != nil {
+		broadcast.GlobalBroadcastService.SendLog("movie", fmt.Sprintf("[一键出片] 解析请求体失败: %v", err), broadcast.GetTimeStr())
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": fmt.Sprintf("解析请求失败: %v", err)})
+		return
+	}
+
+	// 获取提示词模板ID
+	var selectedTemplate *database.PromptTemplate
+	promptTemplateIDStr, ok := reqBody["prompt_template_id"].(string)
+	if ok && promptTemplateIDStr != "" {
+		// 将字符串ID转换为uint
+		promptTemplateID, err := strconv.ParseUint(promptTemplateIDStr, 10, 32)
+		if err != nil {
+			broadcast.GlobalBroadcastService.SendLog("movie", fmt.Sprintf("[一键出片] 解析提示词模板ID失败: %v", err), broadcast.GetTimeStr())
+		} else {
+			// 从数据库获取模板
+			template, err := database.GetPromptTemplateByID(database.DB, uint(promptTemplateID))
+			if err != nil {
+				broadcast.GlobalBroadcastService.SendLog("movie", fmt.Sprintf("[一键出片] 获取提示词模板失败: %v", err), broadcast.GetTimeStr())
+			} else {
+				selectedTemplate = template
+				// 更新全局风格变量
+				if selectedTemplate.StyleAddon != "" {
+					GlobalStyle = selectedTemplate.StyleAddon
+					AdditionalPrompt = ", " + selectedTemplate.StyleAddon
+				}
+				broadcast.GlobalBroadcastService.SendLog("movie", fmt.Sprintf("[一键出片] 使用提示词模板: %s", selectedTemplate.Name), broadcast.GetTimeStr())
+			}
+		}
+	} else {
+		broadcast.GlobalBroadcastService.SendLog("movie", "[一键出片] 未选择特定提示词模板，使用默认风格", broadcast.GetTimeStr())
+	}
+
 	// 直接执行完整工作流处理，不使用goroutine以便调试
 	broadcast.GlobalBroadcastService.SendLog("movie", "开始执行一键出片完整工作流...", broadcast.GetTimeStr())
 
@@ -1418,7 +1469,7 @@ func oneClickFilmHandler(c *gin.Context) {
 						fileManager:   file.NewFileManager(),
 						ttsClient:     indextts2.NewIndexTTS2Client(logger, "http://localhost:7860"),
 						aegisubGen:    aegisub.NewAegisubGenerator(),
-						drawThingsGen: drawthings.NewChapterImageGenerator(logger),
+						drawThingsGen: drawthings.NewChapterImageGeneratorWithStyle(logger, database.DB, GlobalStyle), // 使用带自定义风格的构造函数
 					}
 
 					// 广播开始生成音频
@@ -1633,4 +1684,122 @@ func capcutProjectHandler(c *gin.Context) {
 	}()
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "CapCut project generation started"})
+}
+
+// 设置处理函数
+func settingsHandler(c *gin.Context) {
+	var reqBody map[string]interface{}
+	err := json.NewDecoder(c.Request.Body).Decode(&reqBody)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": fmt.Sprintf("解析请求失败: %v", err)})
+		return
+	}
+
+	settingType, ok := reqBody["setting_type"].(string)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "缺少setting_type参数"})
+		return
+	}
+
+	// 根据设置类型处理不同的设置
+	switch settingType {
+	case "style_template":
+		// 处理风格模板设置
+		settingValue, exists := reqBody["setting_value"]
+		if !exists {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "缺少setting_value参数"})
+			return
+		}
+
+		// 将设置值转换为字符串
+		templateIdStr := ""
+		if settingValue != nil {
+			if templateId, ok := settingValue.(string); ok {
+				templateIdStr = templateId
+			} else {
+				c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "setting_value必须是字符串类型"})
+				return
+			}
+		}
+
+		// 如果模板ID不为空，则获取模板并更新全局设置
+		if templateIdStr != "" && templateIdStr != "undefined" {
+			promptTemplateID, err := strconv.ParseUint(templateIdStr, 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": fmt.Sprintf("解析模板ID失败: %v", err)})
+				return
+			}
+
+			// 从数据库获取模板
+			template, err := database.GetPromptTemplateByID(database.DB, uint(promptTemplateID))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": fmt.Sprintf("获取模板失败: %v", err)})
+				return
+			}
+
+			// 更新全局风格变量
+			if template.StyleAddon != "" {
+				GlobalStyle = template.StyleAddon
+				AdditionalPrompt = ", " + template.StyleAddon
+
+				// 如果MCP服务器实例存在，也更新其全局样式
+				if mcpServerInstance != nil {
+					handler := mcpServerInstance.GetHandler()
+					if handler != nil {
+						handler.UpdateGlobalStyle(template.StyleAddon)
+					}
+				}
+			}
+		} else {
+			// 如果模板ID为空或undefined，重置为默认值
+			GlobalStyle = drawthings.DefaultSuspenseStyle
+			AdditionalPrompt = ", " + drawthings.DefaultSuspenseStyle
+
+			// 如果MCP服务器实例存在，也更新其全局样式为默认值
+			if mcpServerInstance != nil {
+				handler := mcpServerInstance.GetHandler()
+				if handler != nil {
+					handler.UpdateGlobalStyle(drawthings.DefaultSuspenseStyle)
+				}
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "风格设置已保存"})
+
+	case "general":
+		// 处理通用设置
+		settingValue, exists := reqBody["setting_value"]
+		if !exists {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "缺少setting_value参数"})
+			return
+		}
+
+		// 这里可以处理图像尺寸、质量等通用设置
+		// 目前我们只返回成功响应，实际的设置处理可以根据需要扩展
+		// 将settingValue转换为map以备将来使用
+		if generalSettings, ok := settingValue.(map[string]interface{}); ok {
+			// 可以在这里处理各种通用设置
+			// 例如：图像尺寸、质量、线程数等
+			imageWidth, _ := generalSettings["image_width"]
+			imageHeight, _ := generalSettings["image_height"]
+			imageQuality, _ := generalSettings["image_quality"]
+			threadCount, _ := generalSettings["thread_count"]
+
+			// 在这里可以添加对这些设置的处理逻辑
+			fmt.Printf("通用设置已更新: Width=%v, Height=%v, Quality=%v, Threads=%v\n",
+				imageWidth, imageHeight, imageQuality, threadCount)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "通用设置已保存"})
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "未知的设置类型"})
+	}
+}
+
+// 调试全局样式处理函数
+func debugGlobalStyleHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"global_style":      GlobalStyle,
+		"additional_prompt": AdditionalPrompt,
+	})
 }

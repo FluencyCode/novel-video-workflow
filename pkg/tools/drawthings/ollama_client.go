@@ -10,7 +10,59 @@ import (
 	"strings"
 	"time"
 
+	"novel-video-workflow/pkg/database"
+
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+// 全局常量定义
+const (
+	// Ollama系统提示词 - 定义AI图像生成提示词工程师的角色和要求
+	OllamaSystemPrompt = `你是一个专业的AI图像生成提示词工程师。你的任务是根据给定的文本内容生成详细、具体的中文图像提示词(prompt)，以指导AI图像生成模型创建高质量的图像。
+
+请严格按照以下四个要素结构化生成提示词：
+1. 主体描述：画面核心内容（人物、物体、场景），明确 "画什么"
+2. 风格限定：艺术流派 / 设计风格（如扁平化、赛博朋克、悬疑暗黑），决定 "长成什么样"
+3. 细节补充：颜色、光影、构图、材质，提升画面精致度
+4. 氛围渲染：情绪基调（紧张、神秘、冷峻），强化画面感染力
+
+注意事项：
+1. 提示词应该包含丰富的视觉细节，如人物外貌、环境、光线、颜色、构图等
+2. 根据文本内容判断场景类型（室内/室外、白天/夜晚、自然环境/城市等）
+3. 如果文本描述悬疑/恐怖情节，请强调相应的视觉元素，如昏暗光线、神秘氛围、紧张感等
+4. 使用专业摄影和艺术术语，如景深、色调、对比度等
+5. 保持提示词简洁但信息丰富，避免冗余描述
+6. 请务必使用中文输出所有提示词内容`
+
+	// Ollama用户提示词模板 - 用于生成图像提示词
+	OllamaUserPromptTemplate = `根据以下文本内容和风格要求，按照四个要素结构化生成一个详细的中文图像提示词，用于AI图像生成：
+
+文本内容：%s
+
+图像风格：%s
+
+请严格按照以下四个要素组织提示词：
+1. 主体描述：
+2. 风格限定：
+3. 细节补充：
+4. 氛围渲染：
+
+请只返回中文图像提示词，不要添加任何解释或其他内容。`
+
+	// Ollama场景分析系统提示词 - 用于分镜分析
+	OllamaSceneAnalysisSystemPrompt = `🎬你是一个专业的影视分镜师和AI图像生成提示词工程师。你的任务是：
+1. 分析输入的文本内容
+2. 识别出适合生成图像的关键场景/分镜
+3. 为每个分镜生成详细的中文图像提示词
+
+要求：
+1. 将长文本分解为3-8个关键视觉场景（根据内容长度调整）
+2. 每个场景应该是一个可以独立成图的视觉时刻
+3. 提示词需要包含丰富的视觉细节（人物、环境、光线、构图、色调等）
+4. 保持与整体风格的连贯性
+5. 使用专业摄影和艺术术语
+6. 返回格式为JSON数组，包含每个分镜的提示词`
 )
 
 // OllamaClient 封装 Ollama API 调用
@@ -20,12 +72,13 @@ type OllamaClient struct {
 	Logger           *zap.Logger
 	HTTPClient       *http.Client
 	BroadcastService *broadcast.BroadcastService
+	DB               *gorm.DB // 数据库连接，用于获取提示词模板
 }
 
 var defaultModel = "qwen3:4b"
 
 // NewOllamaClient 创建新的Ollama客户端实例
-func NewOllamaClient(logger *zap.Logger, baseURL string, model string) *OllamaClient {
+func NewOllamaClient(logger *zap.Logger, baseURL string, model string, db *gorm.DB) *OllamaClient {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434" // Ollama默认地址
 	}
@@ -41,6 +94,7 @@ func NewOllamaClient(logger *zap.Logger, baseURL string, model string) *OllamaCl
 			Timeout: 300 * time.Minute, // 请求可能需要较长时间
 		},
 		BroadcastService: broadcast.NewBroadcastService(),
+		DB:               db,
 	}
 }
 
@@ -74,29 +128,36 @@ func (c *OllamaClient) SendMsg(text string) {
 
 // GenerateImagePrompt 生成图像提示词
 func (c *OllamaClient) GenerateImagePrompt(text, style string) (string, error) {
+	return c.GenerateImagePromptWithTemplate(text, style, "")
+}
+
+// GenerateImagePromptWithTemplate 使用指定模板生成图像提示词
+func (c *OllamaClient) GenerateImagePromptWithTemplate(text, style, templateName string) (string, error) {
 	c.Logger.Info("开始使用Ollama生成图像提示词",
 		zap.String("text", text),
-		zap.String("style", style))
+		zap.String("style", style),
+		zap.String("template", templateName))
 
 	c.SendMsg(fmt.Sprintf("正在生成TTS语音，文本长度: %d", len(text)))
 
-	systemPrompt := `你是一个专业的AI图像生成提示词工程师。你的任务是根据给定的文本内容生成详细、具体的中文图像提示词(prompt)，以指导AI图像生成模型创建高质量的图像。
-
-注意事项：
-1. 提示词应该包含丰富的视觉细节，如人物外貌、环境、光线、颜色、构图等
-2. 根据文本内容判断场景类型（室内/室外、白天/夜晚、自然环境/城市等）
-3. 如果文本描述悬疑/恐怖情节，请强调相应的视觉元素，如昏暗光线、神秘氛围、紧张感等
-4. 使用专业摄影和艺术术语，如景深、色调、对比度等
-5. 保持提示词简洁但信息丰富，避免冗余描述
-6. 请务必使用中文输出所有提示词内容`
-
-	userPrompt := fmt.Sprintf(`根据以下文本内容生成一个详细的中文图像提示词，用于AI图像生成：
-
-文本内容：%s
-
-图像风格：%s
-
-请只返回中文图像提示词，不要添加任何解释或其他内容。`, text, style)
+	// 如果指定了模板名称，则从数据库获取模板
+	var systemPrompt, userPrompt string
+	if templateName != "" && c.DB != nil {
+		template, err := c.getTemplateByName(templateName)
+		if err != nil {
+			c.Logger.Warn("获取提示词模板失败，使用默认模板", zap.String("template", templateName), zap.Error(err))
+			// 使用默认模板
+			systemPrompt = OllamaSystemPrompt
+			userPrompt = fmt.Sprintf(OllamaUserPromptTemplate, text, style)
+		} else {
+			systemPrompt = template.SystemPrompt
+			userPrompt = fmt.Sprintf(template.UserTemplate, text, style)
+		}
+	} else {
+		// 使用默认模板
+		systemPrompt = OllamaSystemPrompt
+		userPrompt = fmt.Sprintf(OllamaUserPromptTemplate, text, style)
+	}
 
 	request := OllamaRequest{
 		Model:  c.Model,
@@ -164,20 +225,14 @@ func (c *OllamaClient) GenerateImagePrompt(text, style string) (string, error) {
 	return prompt, nil
 }
 
+// getTemplateByName 从数据库获取模板
+func (c *OllamaClient) getTemplateByName(name string) (*database.PromptTemplate, error) {
+	return database.GetPromptTemplateByName(c.DB, name)
+}
+
 // AnalyzeScenesAndGeneratePrompts 分析整个章节内容并生成分镜提示词
 func (c *OllamaClient) AnalyzeScenesAndGeneratePrompts(content, style string, estimatedDurationSecs int) ([]string, error) {
-	systemPrompt := `🎬你是一个专业的影视分镜师和AI图像生成提示词工程师。你的任务是：
-1. 分析输入的文本内容
-2. 识别出适合生成图像的关键场景/分镜
-3. 为每个分镜生成详细的中文图像提示词
-
-要求：
-1. 将长文本分解为3-8个关键视觉场景（根据内容长度调整）
-2. 每个场景应该是一个可以独立成图的视觉时刻
-3. 提示词需要包含丰富的视觉细节（人物、环境、光线、构图、色调等）
-4. 保持与整体风格的连贯性
-5. 使用专业摄影和艺术术语
-6. 返回格式为JSON数组，包含每个分镜的提示词`
+	systemPrompt := OllamaSceneAnalysisSystemPrompt
 
 	estimatedDurationMsg := ""
 	if estimatedDurationSecs > 0 {

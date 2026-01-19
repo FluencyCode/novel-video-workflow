@@ -9,6 +9,16 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+// 全局常量定义
+const (
+	// 悬疑风格描述 - 用于图像生成的风格限定
+	DefaultSuspenseStyle = "悬疑惊悚风格，周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
+	
+	// 普通悬疑风格描述
+	BasicSuspenseStyle = "悬疑风格，氛围紧张，暗淡光线，神秘感"
 )
 
 // ChapterImageGenerator 章节图像生成器
@@ -16,17 +26,53 @@ type ChapterImageGenerator struct {
 	Client       *DrawThingsClient
 	OllamaClient *OllamaClient
 	Logger       *zap.Logger
+	SelectedTemplate string // 选中的提示词模板名称
+	CurrentStyle string   // 当前使用的风格描述
 }
 
 // NewChapterImageGenerator 创建章节图像生成器
 func NewChapterImageGenerator(logger *zap.Logger) *ChapterImageGenerator {
+	return NewChapterImageGeneratorWithDB(logger, nil)
+}
+
+// NewChapterImageGeneratorWithDB 创建带有数据库连接的章节图像生成器
+func NewChapterImageGeneratorWithDB(logger *zap.Logger, db *gorm.DB) *ChapterImageGenerator {
 	client := NewDrawThingsClient(logger, "http://localhost:7861")
-	ollamaClient := NewOllamaClient(logger, "http://localhost:11434", "qwen3:4b") // 使用默认Ollama配置
+	ollamaClient := NewOllamaClient(logger, "http://localhost:11434", "qwen3:4b", db) // 使用默认Ollama配置
 	return &ChapterImageGenerator{
 		Client:       client,
 		OllamaClient: ollamaClient,
 		Logger:       logger,
+		SelectedTemplate: "悬疑惊悚", // 默认使用悬疑惊悚模板
 	}
+}
+
+// NewChapterImageGeneratorWithStyle 创建带有自定义风格的章节图像生成器
+func NewChapterImageGeneratorWithStyle(logger *zap.Logger, db *gorm.DB, defaultStyle string) *ChapterImageGenerator {
+	generator := NewChapterImageGeneratorWithDB(logger, db)
+	if defaultStyle != "" {
+		generator.CurrentStyle = defaultStyle
+		// 尝试根据风格描述获取模板名称
+		generator.SelectedTemplate = getTemplateNameByStyle(defaultStyle)
+	}
+	return generator
+}
+
+// getTemplateNameByStyle 根据风格描述获取模板名称
+func getTemplateNameByStyle(styleDesc string) string {
+	// 简化的实现，实际应该查询数据库匹配最接近的模板
+	if strings.Contains(styleDesc, "水墨") || strings.Contains(styleDesc, "国画") {
+		return "国画艺术"
+	} else if strings.Contains(styleDesc, "浪漫") {
+		return "浪漫温馨"
+	} else if strings.Contains(styleDesc, "科幻") {
+		return "科幻未来"
+	} else if strings.Contains(styleDesc, "自然") {
+		return "自然风景"
+	} else if strings.Contains(styleDesc, "动作") {
+		return "动作冒险"
+	}
+	return "悬疑惊悚" // 默认返回悬疑惊悚
 }
 
 // ParagraphImage 生成的段落图像信息
@@ -78,12 +124,18 @@ func (c *ChapterImageGenerator) GenerateImagesFromChapter(chapterText, outputDir
 		}
 
 		// 使用Ollama生成更精确的图像提示词
-		styleDesc := "悬疑风格，氛围紧张，暗淡光线，神秘感"
-		if isSuspense {
-			styleDesc = "悬疑惊悚风格，周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
+		// 优先使用存储的实际风格描述，如果没有则使用默认逻辑
+		styleDesc := c.CurrentStyle
+		if styleDesc == "" {
+			// 如果没有设置特定风格，使用默认逻辑
+			styleDesc = BasicSuspenseStyle
+			if isSuspense {
+				styleDesc = DefaultSuspenseStyle
+			}
 		}
 
-		imagePrompt, err := c.OllamaClient.GenerateImagePrompt(trimmedPara, styleDesc)
+		// 使用选中的模板生成图像提示词
+		imagePrompt, err := c.OllamaClient.GenerateImagePromptWithTemplate(trimmedPara, styleDesc, c.SelectedTemplate)
 		if err != nil {
 			c.Logger.Warn("使用Ollama生成图像提示词失败，使用原始文本",
 				zap.Int("paragraph_index", i),
@@ -91,14 +143,14 @@ func (c *ChapterImageGenerator) GenerateImagesFromChapter(chapterText, outputDir
 				zap.Error(err))
 			// 如果Ollama失败，使用原始文本加上悬疑风格
 			if isSuspense {
-				imagePrompt = trimmedPara + ", 周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
+				imagePrompt = trimmedPara + ", " + DefaultSuspenseStyle
 			} else {
 				imagePrompt = trimmedPara
 			}
 		}
 
 		// 使用生成的提示词调用DrawThings API生成图像
-		err = c.Client.GenerateImageFromText(imagePrompt, imageFile, width, height, false) // isSuspense已经在提示词中处理
+		err = c.Client.GenerateImageFromTextWithDefaultTemplate(imagePrompt, imageFile, width, height, false) // isSuspense已经在提示词中处理
 		if err != nil {
 			c.Logger.Warn("生成段落图像失败",
 				zap.Int("paragraph_index", i),
@@ -212,7 +264,7 @@ func (c *ChapterImageGenerator) GenerateImageSequenceFromText(text, outputDir, b
 		}
 
 		// 生成图像
-		err := c.Client.GenerateImageFromText(trimmedSeg, imageFile, width, height, isSuspense)
+		err := c.Client.GenerateImageFromTextWithDefaultTemplate(trimmedSeg, imageFile, width, height, isSuspense)
 		if err != nil {
 			c.Logger.Warn("生成文本片段图像失败",
 				zap.Int("segment_index", i),
