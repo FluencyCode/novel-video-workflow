@@ -13,6 +13,17 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"novel-video-workflow/pkg/database"
+)
+
+// 全局常量定义
+const (
+	// 悬疑风格附加描述 - 用于图像生成时的风格增强
+	SuspenseStyleAddon = ", 周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
+	
+	// 负面提示词 - 用于避免不想要的图像元素
+	NegativePrompt = "人脸特写，半身像，模糊，比例失调，原参考图背景，比例失调，缺肢"
 )
 
 // DrawThingsClient 封装 DrawThings API 调用
@@ -22,10 +33,16 @@ type DrawThingsClient struct {
 	HTTPClient       *http.Client
 	APIAvailable     bool // 记录API是否可用
 	BroadcastService *broadcast.BroadcastService
+	DB               *gorm.DB // 数据库连接，用于获取提示词模板
 }
 
 // NewDrawThingsClient 创建新的客户端实例
 func NewDrawThingsClient(logger *zap.Logger, baseURL string) *DrawThingsClient {
+	return NewDrawThingsClientWithDB(logger, baseURL, nil)
+}
+
+// NewDrawThingsClientWithDB 创建带有数据库连接的新客户端实例
+func NewDrawThingsClientWithDB(logger *zap.Logger, baseURL string, db *gorm.DB) *DrawThingsClient {
 	if baseURL == "" {
 		baseURL = "http://localhost:7861" // 默认地址
 	}
@@ -38,6 +55,7 @@ func NewDrawThingsClient(logger *zap.Logger, baseURL string) *DrawThingsClient {
 		},
 		APIAvailable:     false, // 初始状态假设API不可用
 		BroadcastService: broadcast.NewBroadcastService(),
+		DB:               db,
 	}
 
 	// 检查API可用性
@@ -279,7 +297,7 @@ func (c *DrawThingsClient) SaveImageFromBase64(base64Data, filePath string) erro
 }
 
 // GenerateImageFromText 根据文本生成图像
-func (c *DrawThingsClient) GenerateImageFromText(text, outputFile string, width, height int, isSuspense bool) error {
+func (c *DrawThingsClient) GenerateImageFromText(text, outputFile string, width, height int, isSuspense bool, templateName string) error {
 	// 先检查API是否可用
 	c.BroadcastService.SendMessage("ollama整合后的提示词", fmt.Sprintf("内容：%s", text), broadcast.GetTimeStr())
 
@@ -289,12 +307,35 @@ func (c *DrawThingsClient) GenerateImageFromText(text, outputFile string, width,
 		}
 	}
 
-	// 生成提示词，结合文本内容和悬疑风格
+	// 根据模板名称获取风格附加描述和负面提示词
+	var styleAddon, negativePrompt string
+	if templateName != "" && c.DB != nil {
+		template, err := c.getTemplateByName(templateName)
+		if err != nil {
+			c.Logger.Warn("获取提示词模板失败，使用默认模板", zap.String("template", templateName), zap.Error(err))
+			// 使用默认值
+			styleAddon = SuspenseStyleAddon
+			negativePrompt = NegativePrompt
+			if !isSuspense {
+				styleAddon = "" // 非悬疑风格时不添加风格附加描述
+			}
+		} else {
+			styleAddon = template.StyleAddon
+			negativePrompt = template.NegativePrompt
+		}
+	} else {
+		// 使用默认值
+		styleAddon = SuspenseStyleAddon
+		if !isSuspense {
+			styleAddon = "" // 非悬疑风格时不添加风格附加描述
+		}
+		negativePrompt = NegativePrompt
+	}
+
+	// 生成提示词，结合文本内容和风格
 	prompt := text
-	if isSuspense {
-		// 添加悬疑风格描述
-		suspenseStyle := ", 周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见"
-		prompt = text + suspenseStyle
+	if styleAddon != "" {
+		prompt = text + styleAddon
 	}
 
 	// 设置denoisingStrength值
@@ -303,7 +344,7 @@ func (c *DrawThingsClient) GenerateImageFromText(text, outputFile string, width,
 	// 默认参数值
 	params := Txt2ImgRequest{
 		Prompt:            prompt,
-		NegativePrompt:    "人脸特写，半身像，模糊，比例失调，原参考图背景，比例失调，缺肢",
+		NegativePrompt:    negativePrompt,
 		Width:             width,
 		Height:            height,
 		Steps:             8, // 快速生成
@@ -333,8 +374,22 @@ func (c *DrawThingsClient) GenerateImageFromText(text, outputFile string, width,
 	return c.SaveImageFromBase64(response.Images[0], outputFile)
 }
 
+// getTemplateByName 从数据库获取模板
+func (c *DrawThingsClient) getTemplateByName(name string) (*database.PromptTemplate, error) {
+	return database.GetPromptTemplateByName(c.DB, name)
+}
+
+// GenerateImageFromTextWithDefaultTemplate 根据文本生成图像（使用默认行为）
+func (c *DrawThingsClient) GenerateImageFromTextWithDefaultTemplate(text, outputFile string, width, height int, isSuspense bool) error {
+	return c.GenerateImageFromText(text, outputFile, width, height, isSuspense, "悬疑惊悚")
+}
+
+// GenerateImageFromImageWithDefaultTemplate 根据参考图像生成新图像（使用默认行为）
+func (c *DrawThingsClient) GenerateImageFromImageWithDefaultTemplate(initImagePath, text, outputFile string, width, height int, isSuspense bool) error {
+	return c.GenerateImageFromImage(initImagePath, text, outputFile, width, height, isSuspense, "悬疑惊悚")
+}
 // GenerateImageFromImage 根据参考图像生成新图像
-func (c *DrawThingsClient) GenerateImageFromImage(initImagePath, text, outputFile string, width, height int, isSuspense bool) error {
+func (c *DrawThingsClient) GenerateImageFromImage(initImagePath, text, outputFile string, width, height int, isSuspense bool, templateName string) error {
 	// 读取参考图像并编码为Base64
 	initImageBytes, err := os.ReadFile(initImagePath)
 	if err != nil {
@@ -343,12 +398,36 @@ func (c *DrawThingsClient) GenerateImageFromImage(initImagePath, text, outputFil
 
 	initImageBase64 := base64.StdEncoding.EncodeToString(initImageBytes)
 
+	// 根据模板名称获取风格附加描述和负面提示词
+	var styleAddon, negativePrompt string
+	if templateName != "" && c.DB != nil {
+		template, err := c.getTemplateByName(templateName)
+		if err != nil {
+			c.Logger.Warn("获取提示词模板失败，使用默认模板", zap.String("template", templateName), zap.Error(err))
+			// 使用默认悬疑风格
+			styleAddon = ", 参考图面部特征，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾"
+			negativePrompt = NegativePrompt
+			if !isSuspense {
+				styleAddon = "" // 非悬疑风格时不添加风格附加描述
+			}
+		} else {
+			styleAddon = template.StyleAddon
+			negativePrompt = template.NegativePrompt
+		}
+	} else {
+		// 使用默认悬疑风格
+		styleAddon = ", 参考图面部特征，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾"
+		if !isSuspense {
+			styleAddon = "" // 非悬疑风格时不添加风格附加描述
+		}
+		negativePrompt = NegativePrompt
+	}
+
 	// 生成提示词
 	prompt := text
 	if isSuspense {
-		// 添加悬疑风格描述
-		suspenseStyle := ", 参考图面部特征，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾"
-		prompt = "(" + text + ":1.5)" + suspenseStyle
+		// 添加风格描述
+		prompt = "(" + text + ":1.5)" + styleAddon
 	}
 
 	// 默认参数值
@@ -356,7 +435,7 @@ func (c *DrawThingsClient) GenerateImageFromImage(initImagePath, text, outputFil
 		InitImages:     []string{initImageBase64},
 		Strength:       0.7, // 关键：突破原图人脸构图限制
 		Prompt:         prompt,
-		NegativePrompt: "人脸特写，半身像，原参考图背景，比例失调，缺肢",
+		NegativePrompt: negativePrompt,
 		Width:          width,
 		Height:         height,
 		Steps:          8,

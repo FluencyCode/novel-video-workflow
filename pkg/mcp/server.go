@@ -18,6 +18,10 @@ type Server struct {
 }
 
 func NewServer(processor *workflow.Processor, logger *zap.Logger) (*Server, error) {
+	return NewServerWithGlobalStyle(processor, logger, "")
+}
+
+func NewServerWithGlobalStyle(processor *workflow.Processor, logger *zap.Logger, globalStyle string) (*Server, error) {
 	var s *Server
 	
 	// 检查是否在MCP环境中运行（通过环境变量判断）
@@ -37,7 +41,7 @@ func NewServer(processor *workflow.Processor, logger *zap.Logger) (*Server, erro
 		}
 		
 		// 创建 Handler 实例
-		s.handler = NewHandler(s.server, processor, logger)
+		s.handler = NewHandler(s.server, processor, logger, globalStyle)
 		
 		// 注册所有工具到MCP服务器
 		s.handler.RegisterTools()
@@ -59,7 +63,7 @@ func NewServer(processor *workflow.Processor, logger *zap.Logger) (*Server, erro
 		}
 		
 		// 创建 Handler 实例
-		s.handler = NewHandler(s.server, processor, logger)
+		s.handler = NewHandler(s.server, processor, logger, globalStyle)
 		
 		// 注册所有工具到MCP服务器
 		s.handler.RegisterTools()

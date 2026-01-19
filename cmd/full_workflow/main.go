@@ -318,7 +318,7 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 
 			imageFile := filepath.Join(imagesDir, fmt.Sprintf("paragraph_%02d.png", idx+1))
 
-			err = wp.drawThingsGen.Client.GenerateImageFromText(
+			err = wp.drawThingsGen.Client.GenerateImageFromTextWithDefaultTemplate(
 				optimizedPrompt,
 				imageFile,
 				512,   // 缩小宽度
@@ -342,7 +342,7 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 		imageFile := filepath.Join(imagesDir, fmt.Sprintf("scene_%02d.png", idx+1))
 
 		// 使用分镜描述生成图像
-		err = wp.drawThingsGen.Client.GenerateImageFromText(
+		err = wp.drawThingsGen.Client.GenerateImageFromTextWithDefaultTemplate(
 			sceneDesc,
 			imageFile,
 			512,   // 缩小宽度

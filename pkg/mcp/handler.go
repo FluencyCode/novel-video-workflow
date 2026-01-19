@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	aegisub "novel-video-workflow/pkg/tools/aegisub"
+	database "novel-video-workflow/pkg/database"
 	drawthings "novel-video-workflow/pkg/tools/drawthings"
 	"novel-video-workflow/pkg/tools/file"
 	"novel-video-workflow/pkg/tools/indextts2"
@@ -26,15 +29,19 @@ type Handler struct {
 	processor *workflow.Processor
 	logger    *zap.Logger
 	toolNames []string
+	db        *gorm.DB
+	globalStyle string
 }
 
 // NewHandler creates a new handler
-func NewHandler(server *mcp_server.MCPServer, processor *workflow.Processor, logger *zap.Logger) *Handler {
+func NewHandler(server *mcp_server.MCPServer, processor *workflow.Processor, logger *zap.Logger, globalStyle string) *Handler {
 	h := &Handler{
 		server:    server,
 		processor: processor,
 		logger:    logger,
 		toolNames: make([]string, 0),
+		db:        database.DB, // 使用全局数据库连接
+		globalStyle: globalStyle,
 	}
 
 	return h
@@ -116,12 +123,13 @@ func (h *Handler) RegisterTools() {
 
 	// Register generate_images_from_chapter_with_ai_prompt tool - DrawThings章节文生图工具(使用AI生成提示词)
 	generateImagesFromChapterWithAIPromptTool := mcp.NewTool("generate_images_from_chapter_with_ai_prompt",
-		mcp.WithDescription("Generate images from chapter text using AI-generated prompts with DrawThings API and suspense style"),
+		mcp.WithDescription("Generate images from chapter text using AI-generated prompts with DrawThings API and selected style template"),
 		mcp.WithString("chapter_text", mcp.Required(), mcp.Description("The chapter text to generate images from")),
 		mcp.WithString("output_dir", mcp.Required(), mcp.Description("Output directory for generated images")),
 		mcp.WithNumber("width", mcp.Description("Image width"), mcp.DefaultNumber(float64(512))),
 		mcp.WithNumber("height", mcp.Description("Image height"), mcp.DefaultNumber(float64(896))),
 		mcp.WithBoolean("is_suspense", mcp.Description("Apply suspense style"), mcp.DefaultBool(true)),
+		mcp.WithString("template_id", mcp.Description("Template ID to use for image generation")),
 	)
 
 	h.server.AddTool(generateImagesFromChapterWithAIPromptTool, h.handleGenerateImagesFromChapterWithAIPrompt)
@@ -712,7 +720,7 @@ func (h *Handler) handleGenerateImageFromText(ctx context.Context, request mcp.C
 	// 使用DrawThings客户端生成图像
 	client := drawthings.NewDrawThingsClient(h.logger, "http://localhost:7861")
 
-	err = client.GenerateImageFromText(text, outputFile, width, height, isSuspense)
+	err = client.GenerateImageFromTextWithDefaultTemplate(text, outputFile, width, height, isSuspense)
 	if err != nil {
 		h.logger.Error("Failed to generate image from text", zap.Error(err))
 		response := map[string]interface{}{
@@ -780,7 +788,7 @@ func (h *Handler) HandleGenerateImageFromTextDirect(request *MockRequest) (map[s
 	// 使用DrawThings客户端生成图像
 	client := drawthings.NewDrawThingsClient(h.logger, "http://localhost:7861")
 
-	err = client.GenerateImageFromText(text, outputFile, width, height, isSuspense)
+	err = client.GenerateImageFromTextWithDefaultTemplate(text, outputFile, width, height, isSuspense)
 	if err != nil {
 		h.logger.Error("Failed to generate image from text", zap.Error(err))
 		response := map[string]interface{}{
@@ -860,7 +868,7 @@ func (h *Handler) handleGenerateImageFromImage(ctx context.Context, request mcp.
 	// 使用DrawThings客户端生成图像
 	client := drawthings.NewDrawThingsClient(h.logger, "http://localhost:7861")
 
-	err = client.GenerateImageFromImage(initImagePath, text, outputFile, width, height, isSuspense)
+	err = client.GenerateImageFromImageWithDefaultTemplate(initImagePath, text, outputFile, width, height, isSuspense)
 	if err != nil {
 		h.logger.Error("Failed to generate image from reference image", zap.Error(err))
 		response := map[string]interface{}{
@@ -948,7 +956,7 @@ func (h *Handler) HandleGenerateImageFromImageDirect(request *MockRequest) (map[
 	// 使用DrawThings客户端生成图像
 	client := drawthings.NewDrawThingsClient(h.logger, "http://localhost:7861")
 
-	err = client.GenerateImageFromImage(initImagePath, text, outputFile, width, height, isSuspense)
+	err = client.GenerateImageFromImageWithDefaultTemplate(initImagePath, text, outputFile, width, height, isSuspense)
 	if err != nil {
 		h.logger.Error("Failed to generate image from reference image", zap.Error(err))
 		response := map[string]interface{}{
@@ -980,6 +988,11 @@ func (h *Handler) HandleGenerateImageFromImageDirect(request *MockRequest) (map[
 // GetToolNames gets all tool names
 func (h *Handler) GetToolNames() []string {
 	return h.toolNames
+}
+
+// UpdateGlobalStyle 更新全局样式设置
+func (h *Handler) UpdateGlobalStyle(style string) {
+	h.globalStyle = style
 }
 
 // handleGenerateImagesFromChapter generates images from chapter text using DrawThings API
@@ -1142,6 +1155,7 @@ func (h *Handler) handleGenerateImagesFromChapterWithAIPrompt(ctx context.Contex
 	width := int(request.GetInt("width", 512))
 	height := int(request.GetInt("height", 896))
 	isSuspense := request.GetBool("is_suspense", true)
+	templateIDStr := request.GetString("template_id", "")
 
 	// 确保输出目录存在
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -1150,7 +1164,30 @@ func (h *Handler) handleGenerateImagesFromChapterWithAIPrompt(ctx context.Contex
 	}
 
 	// 使用章节图像生成器（使用Ollama生成提示词）
-	generator := drawthings.NewChapterImageGenerator(h.logger)
+	// 默认使用全局样式，但如果提供了模板ID，则使用该模板
+	styleToUse := h.globalStyle
+	selectedTemplateName := "" // 用于跟踪选中的模板名称
+	
+	// 如果提供了模板ID，尝试从数据库获取模板并更新生成器的选中模板和样式
+	if templateIDStr != "" {
+		if h.db != nil {
+			templateID, err := strconv.ParseUint(templateIDStr, 10, 32)
+			if err == nil {
+				template, err := database.GetPromptTemplateByID(h.db, uint(templateID))
+				if err == nil && template != nil {
+					styleToUse = template.StyleAddon // 使用模板的风格附加内容
+					selectedTemplateName = template.Name // 记录模板名称
+				}
+			}
+		}
+	}
+	
+	generator := drawthings.NewChapterImageGeneratorWithStyle(h.logger, h.db, styleToUse)
+	
+	// 如果有明确的模板名称，直接设置到生成器
+	if selectedTemplateName != "" {
+		generator.SelectedTemplate = selectedTemplateName
+	}
 
 	results, err := generator.GenerateImagesFromChapter(chapterText, outputDir, width, height, isSuspense)
 	if err != nil {
@@ -1223,6 +1260,7 @@ func (h *Handler) HandleGenerateImagesFromChapterWithAIPromptDirect(request *Moc
 	width := request.GetInt("width", 512)
 	height := request.GetInt("height", 896)
 	isSuspense := request.GetBool("is_suspense", true)
+	templateIDStr := request.GetString("template_id", "")
 
 	// 确保输出目录存在
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -1231,7 +1269,30 @@ func (h *Handler) HandleGenerateImagesFromChapterWithAIPromptDirect(request *Moc
 	}
 
 	// 使用章节图像生成器（使用Ollama生成提示词）
-	generator := drawthings.NewChapterImageGenerator(h.logger)
+	// 默认使用全局样式，但如果提供了模板ID，则使用该模板
+	styleToUse := h.globalStyle
+	selectedTemplateName := "" // 用于跟踪选中的模板名称
+	
+	// 如果提供了模板ID，尝试从数据库获取模板并更新生成器的选中模板和样式
+	if templateIDStr != "" {
+		if h.db != nil {
+			templateID, err := strconv.ParseUint(templateIDStr, 10, 32)
+			if err == nil {
+				template, err := database.GetPromptTemplateByID(h.db, uint(templateID))
+				if err == nil && template != nil {
+					styleToUse = template.StyleAddon // 使用模板的风格附加内容
+					selectedTemplateName = template.Name // 记录模板名称
+				}
+			}
+		}
+	}
+	
+	generator := drawthings.NewChapterImageGeneratorWithStyle(h.logger, h.db, styleToUse)
+	
+	// 如果有明确的模板名称，直接设置到生成器
+	if selectedTemplateName != "" {
+		generator.SelectedTemplate = selectedTemplateName
+	}
 
 	results, err := generator.GenerateImagesFromChapter(chapterText, outputDir, width, height, isSuspense)
 	if err != nil {
