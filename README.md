@@ -1,11 +1,13 @@
 <p align="center">
  <img src="https://github.com/hulutech-web/novel-video-workflow/blob/master/logo.png?raw=true" width="300" />
 </p>
-
 <p align="center">
-特别说明  
-剪映客户端版本 3.4.1 其他版本可自行尝试   
-下载链接：https://www.alipan.com/t/CIutUpJWmLVW81ZOGAfY
+特别说明 <br/>
+剪映客户端版本 3.4.1 其他版本可自行尝试<br/>
+下载链接： <br/><a href="https://www.ilanzou.com/s/szdnSewG">https://www.ilanzou.com/s/szdnSewG</a>  <br/>
+Aegisub客户端下载   <br/>
+<a href="https://www.ilanzou.com/s/uiDnSeXN">https://www.ilanzou.com/s/uiDnSeXN</a>
+ <br/>
 </p>
 
 # 小说视频工作流 (Novel Video Workflow)
@@ -327,18 +329,17 @@ output/
 ## 🎬 效果一览 
 
 ### 音频与字幕示例
-- [chapter_10.srt](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/chapter_10.srt)
-- [chapter_10.wav](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/chapter_10.wav)
+- [chapter_07.srt](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/chapter_07.srt)
+- [chapter_07.wav](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/chapter_07.wav)
 
 ### AI生成图像示例 (宫格展示)
 
 <div align="center">
 
-<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_01.png" width="200" alt="场景 01" title="AI生成图像 - 场景 01"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_02.png" width="200" alt="场景 02" title="AI生成图像 - 场景 02">  
-<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_03.png" width="200" alt="场景 03" title="AI生成图像 - 场景 03"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_04.png" width="200" alt="场景 04" title="AI生成图像 - 场景 04">  
-<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_05.png" width="200" alt="场景 05" title="AI生成图像 - 场景 05"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_06.png" width="200" alt="场景 06" title="AI生成图像 - 场景 06">  
-<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_07.png" width="200" alt="场景 07" title="AI生成图像 - 场景 07"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_08.png" width="200" alt="场景 08" title="AI生成图像 - 场景 08">  
-<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_09.png" width="200" alt="场景 09" title="AI生成图像 - 场景 09"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_10/scene_10.png" width="200" alt="场景 10" title="AI生成图像 - 场景 10">
+<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_01.png" width="200" alt="场景 01" title="AI生成图像 - 场景 01"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_02.png" width="200" alt="场景 02" title="AI生成图像 - 场景 02">  
+<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_03.png" width="200" alt="场景 03" title="AI生成图像 - 场景 03"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_04.png" width="200" alt="场景 04" title="AI生成图像 - 场景 04">  
+<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_05.png" width="200" alt="场景 05" title="AI生成图像 - 场景 05"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_06.png" width="200" alt="场景 06" title="AI生成图像 - 场景 06">  
+<img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_07.png" width="200" alt="场景 07" title="AI生成图像 - 场景 07"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_08.png" width="200" alt="场景 08" title="AI生成图像 - 场景 08">  
 
 </div>
 
