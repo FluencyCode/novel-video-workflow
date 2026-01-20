@@ -328,9 +328,21 @@ output/
 
 ## 🎬 效果一览 
 
+### 视频演示
+<div align="center">
+  
+<video width="80%" controls poster="logo.png">
+  <source src="幽灵客栈_chapter_07.mov" type="video/quicktime">
+  您的浏览器不支持视频标签。
+</video>
+
+<p><em>AI自动生成的视频内容 - 展示了从文本到图像再到视频的完整转换流程</em></p>
+</div>
+
 ### 音频与字幕示例
-- [chapter_07.srt](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/chapter_07.srt)
-- [chapter_07.wav](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/chapter_07.wav)
+- 🎵 [chapter_07.wav](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/chapter_07.wav) - AI生成的配音
+- 📄 [chapter_07.srt](output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/chapter_07.srt) - 自动生成的字幕文件
+
 
 ### AI生成图像示例 (宫格展示)
 
@@ -342,6 +354,7 @@ output/
 <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_07.png" width="200" alt="场景 07" title="AI生成图像 - 场景 07"> <img src="output/%E5%B9%BD%E7%81%B5%E5%AE%A2%E6%A0%88/chapter_07/scene_08.png" width="200" alt="场景 08" title="AI生成图像 - 场景 08">  
 
 </div>
+
 
 ## 🤝 贡献
 
