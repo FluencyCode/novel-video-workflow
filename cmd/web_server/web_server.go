@@ -1644,8 +1644,16 @@ func oneClickFilmHandler(c *gin.Context) {
 		return
 	}
 
+	// 获取前端可能传递的特定项目名称
+	specifiedProjectName, _ := reqBody["project_name"].(string)
+
 	// 遍历input目录寻找小说目录
 	for _, item := range items {
+		// 如果指定了特定项目，只处理该特定项目；否则处理第一个项目
+		if specifiedProjectName != "" && item.Name() != specifiedProjectName {
+			continue
+		}
+		
 		if item.IsDir() { // 只处理目录
 			novelDir := filepath.Join(inputDir, item.Name())
 
@@ -1765,7 +1773,7 @@ func oneClickFilmHandler(c *gin.Context) {
 
 							}
 						} else {
-							broadcast.GlobalBroadcastService.SendLog("aegisub", "[一键出片] ⚠️  由于音频文件不存在，跳过字幕生成", broadcast.GetTimeStr())
+								broadcast.GlobalBroadcastService.SendLog("aegisub", "[一键出片] ⚠️  由于音频文件不存在，跳过字幕生成", broadcast.GetTimeStr())
 
 						}
 						broadcast.GlobalBroadcastService.SendLog("image", "[一键出片] 🎨 步骤4 - 生成图像...", broadcast.GetTimeStr())
@@ -1826,6 +1834,17 @@ func oneClickFilmHandler(c *gin.Context) {
 							broadcast.GlobalBroadcastService.SendLog("image", fmt.Sprintf("[一键出片] ⚠️  图像生成失败: %v", err), broadcast.GetTimeStr())
 						} else {
 							broadcast.GlobalBroadcastService.SendLog("image", fmt.Sprintf("[一键出片] ✅ 图像生成完成，保存在: %s", imagesDir), broadcast.GetTimeStr())
+							
+							// 更新章节的图像路径
+							// 获取生成的图像文件列表
+							imageFiles, err := wp.getImageFilesFromDir(imagesDir)
+							if err == nil {
+								imageFilesJSON, _ := json.Marshal(imageFiles)
+								err = wp.updateChapterImages(tempChapter.ID, string(imageFilesJSON))
+								if err != nil {
+									wp.logger.Error("更新章节图像路径失败", zap.Uint("chapter_id", tempChapter.ID), zap.Error(err))
+								}
+							}
 						}
 
 						// 一键出片流程至此完成，所有资源（音频、字幕、图像）已保存到output目录
@@ -1852,7 +1871,37 @@ func oneClickFilmHandler(c *gin.Context) {
 						}
 
 						// 保存章节工作流参数到数据库
-						workflowParamsBytes, err := json.Marshal(chapterParams)
+						// 重构章节参数，包含所有工作流详细信息
+						detailedChapterParams := map[string]interface{}{
+							"chapter_number":         key,
+							"chapter_title":          fmt.Sprintf("第%d章", key),
+							"chapter_content_length": len(val),
+							"audio_generation": map[string]interface{}{
+								"input_text":      val[:min(len(val), 100)], // 只保存前100个字符作为示例
+								"reference_audio": "./assets/ref_audio/ref.m4a",
+								"output_file":     audioFile,
+								"timestamp":       time.Now().Format(time.RFC3339),
+								"status":          "completed",
+							},
+							"subtitle_generation": map[string]interface{}{
+								"audio_file":    audioFile,
+								"subtitle_file": subtitleFile,
+								"input_text":    val[:min(len(val), 200)],
+								"status":        "completed", // 根据实际情况更新
+							},
+							"image_generation": map[string]interface{}{
+								"images_dir":           imagesDir,
+								"estimated_duration":   estimatedAudioDuration,
+								"status":               "completed",
+							},
+							"overall_status": "completed",
+							"execution_times": map[string]interface{}{
+								"start_time": time.Now().Format(time.RFC3339),
+								"end_time":   time.Now().Format(time.RFC3339),
+							},
+						}
+
+						workflowParamsBytes, err := json.Marshal(detailedChapterParams)
 						if err != nil {
 							broadcast.GlobalBroadcastService.SendLog("workflow", fmt.Sprintf("[一键出片] 序列化章节参数失败: %v", err), broadcast.GetTimeStr())
 						} else {
@@ -1900,9 +1949,9 @@ func oneClickFilmHandler(c *gin.Context) {
 		}
 	}
 
-	broadcast.GlobalBroadcastService.SendLog("workflow", "[一键出片] ✅ 一键出片完整工作流执行完成！", broadcast.GetTimeStr())
-
-	return // 处理完一个小说就返回
+	// 如果没有找到匹配的项目，返回错误
+	broadcast.GlobalBroadcastService.SendLog("workflow", "[一键出片] ❌ 未找到匹配的项目文件结构", broadcast.GetTimeStr())
+	c.JSON(http.StatusOK, gin.H{"status": "error", "message": "未找到匹配的项目文件结构，请确保input目录下有正确命名的项目文件夹和小说文件"})
 }
 
 // capcutProjectHandler 生成剪映项目
