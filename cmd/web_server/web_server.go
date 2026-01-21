@@ -1050,6 +1050,37 @@ func (b *BroadcastLoggerAdapter) Write(entry zapcore.Entry, fields []zapcore.Fie
 	return err
 }
 
+// updateChapterAudio 更新章节的音频URL
+func (wp *WorkflowProcessor) updateChapterAudio(chapterID uint, audioURL string) error {
+    return database.DB.Model(&database.Chapter{}).Where("id = ?", chapterID).Update("audio_url", audioURL).Error
+}
+
+// updateChapterImages 更新章节的图像路径
+func (wp *WorkflowProcessor) updateChapterImages(chapterID uint, imagePaths string) error {
+    return database.DB.Model(&database.Chapter{}).Where("id = ?", chapterID).Update("image_paths", imagePaths).Error
+}
+
+// getImageFilesFromDir 从目录中获取图像文件列表
+func (wp *WorkflowProcessor) getImageFilesFromDir(dir string) ([]string, error) {
+    var imageFiles []string
+    files, err := os.ReadDir(dir)
+    if err != nil {
+        return nil, err
+    }
+
+    for _, file := range files {
+        if !file.IsDir() {
+            ext := strings.ToLower(filepath.Ext(file.Name()))
+            if ext == ".png" || ext == ".jpg" || ext == ".jpeg" {
+                imagePath := filepath.Join(dir, file.Name())
+                imageFiles = append(imageFiles, imagePath)
+            }
+        }
+    }
+
+    return imageFiles, nil
+}
+
 func webServerMain() {
 	loadToolsList()
 
@@ -1095,6 +1126,14 @@ func webServerMain() {
 	r.POST("/api/prompt-templates", promptTemplateAPI.CreatePromptTemplate)
 	r.PUT("/api/prompt-templates/:id", promptTemplateAPI.UpdatePromptTemplate)
 	r.DELETE("/api/prompt-templates/:id", promptTemplateAPI.DeletePromptTemplate)
+
+	// 工作流跟踪相关路由
+	workflowTrackingAPI := api_pkg.NewWorkflowTrackingAPI(mcpServerInstance.GetProcessor())
+	r.POST("/api/workflow/chapter/record-params", workflowTrackingAPI.RecordChapterWorkflowParams)
+	r.GET("/api/workflow/chapter/:id/params", workflowTrackingAPI.GetChapterWorkflowParams)
+	r.POST("/api/workflow/scene/record-params", workflowTrackingAPI.RecordSceneWorkflowParams)
+	r.GET("/api/workflow/scene/:id/params", workflowTrackingAPI.GetSceneWorkflowParams)
+	r.GET("/api/chapter/:id/scenes", workflowTrackingAPI.GetScenesByChapter)
 
 	// 添加文件管理API端点
 	r.GET("/api/files/list", fileListHandler)
@@ -1196,7 +1235,11 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 				continue
 			}
 
+			// 记录Ollama生成图像提示词的过程
+			promptGenerationStartTime := time.Now()
 			optimizedPrompt, err := wp.drawThingsGen.OllamaClient.GenerateImagePrompt(paragraph, styleDesc)
+			promptGenerationEndTime := time.Now()
+			
 			if err != nil {
 				wp.logger.Warn("使用Ollama生成图像提示词失败，使用原始文本",
 					zap.Int("paragraph_index", idx),
@@ -1205,6 +1248,21 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 				optimizedPrompt = paragraph + AdditionalPrompt
 			}
 
+			// 准备DrawThings请求参数
+			drawThingsConfig := map[string]interface{}{
+				"prompt":         optimizedPrompt,
+				"width":          512,
+				"height":         896,
+				"negative_prompt":  ",人脸特写，半身像，模糊，比例失调，原参考图背景，比例失调，缺肢",
+				"steps":          8,
+				"sampler_name":   "DPM++ 2M Trailing",
+				"guidance_scale": 1.0,
+				"batch_size":     1,
+				"model":          "z_image_turbo_1.0_q6p.ckpt",
+				"is_suspense":    true,
+			}
+			drawThingsConfigBytes, _ := json.Marshal(drawThingsConfig)
+			
 			imageFile := filepath.Join(imagesDir, fmt.Sprintf("paragraph_%02d.png", idx+1))
 
 			err = wp.drawThingsGen.Client.GenerateImageFromTextWithDefaultTemplate(
@@ -1214,12 +1272,28 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 				896,   // 缩小高度
 				false, // 风格已在提示词中处理
 			)
+			
+			drawThingsResult := map[string]interface{}{
+				"image_file": imageFile,
+				"success":    err == nil,
+				"error":      err,
+			}
+			drawThingsResultBytes, _ := json.Marshal(drawThingsResult)
+
 			if err != nil {
 				wp.logger.Warn("生成图像失败", zap.String("paragraph", paragraph[:min(len(paragraph), 50)]), zap.Error(err))
 				fmt.Printf("⚠️ 段落图像生成失败: %v\n", err)
 			} else {
 				fmt.Printf("✅ 段落图像生成完成: %s\n", imageFile)
 			}
+
+			// 准备Ollama请求参数
+			ollamaRequest := map[string]interface{}{
+				"text":      paragraph,
+				"style":     styleDesc,
+				"timestamp": promptGenerationStartTime.Format(time.RFC3339),
+			}
+			ollamaRequestBytes, _ := json.Marshal(ollamaRequest)
 
 			// 即使在回退情况下，也将段落作为场景保存到数据库
 			scene := &database.Scene{
@@ -1228,16 +1302,52 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 				Prompt:           optimizedPrompt,
 				SegmentationInfo: fmt.Sprintf("段落信息: %s", paragraph),
 				OriginalText:     content,
-				OllamaRequest:    "{}", // 实际请求内容
+				OllamaRequest:    string(ollamaRequestBytes),
 				OllamaResponse:   optimizedPrompt,
-				DrawThingsConfig: fmt.Sprintf("{\"width\": 512, \"height\": 896}"),
-				DrawThingsResult: fmt.Sprintf("{\"image_file\": \"%s\"}", imageFile),
+				DrawThingsConfig: string(drawThingsConfigBytes),
+				DrawThingsResult: string(drawThingsResultBytes),
 				ChapterID:        chapterID, // 使用传入的章节ID
 				ImageURL:         imageFile,
 				AudioURL:         "",
 				RetryCount:       0,
 				Order:            idx + 1,
+				StartTime:        promptGenerationStartTime,
+				EndTime:          time.Now(),
+				Status:           "completed",
 			}
+			
+			// 记录工作流详细参数
+			workflowDetails := map[string]interface{}{
+				"ollama_analysis": map[string]interface{}{
+					"request": map[string]interface{}{
+						"text":      paragraph[:min(len(paragraph), 200)],
+						"style":     styleDesc,
+						"timestamp": promptGenerationStartTime.Format(time.RFC3339),
+					},
+					"response": map[string]interface{}{
+						"prompt":    optimizedPrompt,
+						"timestamp": promptGenerationEndTime.Format(time.RFC3339),
+						"duration":  promptGenerationEndTime.Sub(promptGenerationStartTime).Seconds(),
+					},
+				},
+				"drawthings_generation": map[string]interface{}{
+					"request":   drawThingsConfig,
+					"response":  drawThingsResult,
+					"timestamp": time.Now().Format(time.RFC3339),
+					"duration":  time.Since(promptGenerationEndTime).Seconds(),
+				},
+				"execution_info": map[string]interface{}{
+					"paragraph_index": idx,
+					"paragraph_text":  paragraph[:min(len(paragraph), 200)],
+					"chapter_id":      chapterID,
+					"image_file":      imageFile,
+					"status":          "completed",
+				},
+			}
+			
+			workflowDetailsBytes, _ := json.Marshal(workflowDetails)
+			scene.WorkflowDetails = string(workflowDetailsBytes)
+
 			result := database.DB.Create(scene)
 			if result.Error != nil {
 				wp.logger.Error("保存段落场景到数据库失败", zap.Error(result.Error), zap.String("paragraph", paragraph[:min(len(paragraph), 100)]))
@@ -1275,6 +1385,55 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 	// 将场景数据保存到数据库
 	for idx, sceneDesc := range sceneDescriptions {
 		imageFile := filepath.Join(imagesDir, fmt.Sprintf("scene_%02d.png", idx+1))
+		
+		// 准备DrawThings请求参数
+		drawThingsConfig := map[string]interface{}{
+			"prompt":         sceneDesc,
+			"width":          512,
+			"height":         896,
+			"negative_prompt":  ",人脸特写，半身像，模糊，比例失调，原参考图背景，比例失调，缺肢",
+			"steps":          8,
+			"sampler_name":   "DPM++ 2M Trailing",
+			"guidance_scale": 1.0,
+			"batch_size":     1,
+			"model":          "z_image_turbo_1.0_q6p.ckpt",
+			"is_suspense":    true,
+		}
+		drawThingsConfigBytes, _ := json.Marshal(drawThingsConfig)
+		
+		// 使用分镜描述生成图像
+		err = wp.drawThingsGen.Client.GenerateImageFromTextWithDefaultTemplate(
+			sceneDesc,
+			imageFile,
+			512,   // 缩小宽度
+			896,   // 缩小高度
+			false, // 风格已在提示词中处理
+		)
+		
+		drawThingsResult := map[string]interface{}{
+			"image_file": imageFile,
+			"success":    err == nil,
+			"error":      err,
+		}
+		drawThingsResultBytes, _ := json.Marshal(drawThingsResult)
+
+		if err != nil {
+			wp.logger.Warn("生成分镜图像失败", zap.String("scene", sceneDesc[:min(len(sceneDesc), 50)]), zap.Error(err))
+			fmt.Printf("⚠️  分镜图像生成失败: %v\n", err)
+		} else {
+			fmt.Printf("✅ 分镜图像生成完成: %s\n", imageFile)
+		}
+		
+		// 准备Ollama请求参数（分镜分析）
+		sceneAnalysisStartTime := time.Now() // 假设分析时间就是现在
+		ollamaRequest := map[string]interface{}{
+			"content":      content[:min(len(content), 200)],
+			"style":        styleDesc,
+			"duration_sec": estimatedDurationSecs,
+			"timestamp":    sceneAnalysisStartTime.Format(time.RFC3339),
+		}
+		ollamaRequestBytes, _ := json.Marshal(ollamaRequest)
+
 		// 创建场景记录并保存到数据库
 		scene := &database.Scene{
 			Title:            fmt.Sprintf("场景 %d", idx+1),
@@ -1282,16 +1441,52 @@ func (wp *WorkflowProcessor) generateImagesWithOllamaPrompts(content, imagesDir 
 			Prompt:           sceneDesc,
 			SegmentationInfo: fmt.Sprintf("分镜信息: %s", sceneDesc),
 			OriginalText:     content,
-			OllamaRequest:    "{}", // 实际请求内容
+			OllamaRequest:    string(ollamaRequestBytes),
 			OllamaResponse:   sceneDesc,
-			DrawThingsConfig: fmt.Sprintf("{\"width\": 512, \"height\": 896}"),
-			DrawThingsResult: fmt.Sprintf("{\"image_file\": \"%s\"}", imageFile),
+			DrawThingsConfig: string(drawThingsConfigBytes),
+			DrawThingsResult: string(drawThingsResultBytes),
 			ChapterID:        chapterID, // 使用传入的章节ID
 			ImageURL:         imageFile,
 			AudioURL:         "",
 			RetryCount:       0,
 			Order:            idx + 1,
+			StartTime:        sceneAnalysisStartTime,
+			EndTime:          time.Now(),
+			Status:           "completed",
 		}
+		
+		// 记录工作流详细参数
+		workflowDetails := map[string]interface{}{
+			"ollama_analysis": map[string]interface{}{
+				"request": map[string]interface{}{
+					"content":      content[:min(len(content), 200)],
+					"style":        styleDesc,
+					"duration_sec": estimatedDurationSecs,
+					"timestamp":    sceneAnalysisStartTime.Format(time.RFC3339),
+				},
+				"response": map[string]interface{}{
+					"scene_descriptions": sceneDescriptions,
+					"timestamp":         time.Now().Format(time.RFC3339),
+				},
+			},
+			"drawthings_generation": map[string]interface{}{
+				"request":   drawThingsConfig,
+				"response":  drawThingsResult,
+				"timestamp": time.Now().Format(time.RFC3339),
+			},
+			"execution_info": map[string]interface{}{
+				"scene_index":    idx,
+				"scene_text":     sceneDesc[:min(len(sceneDesc), 200)],
+				"chapter_id":     chapterID,
+				"image_file":     imageFile,
+				"status":         "completed",
+				"total_scenes":   len(sceneDescriptions),
+			},
+		}
+		
+		workflowDetailsBytes, _ := json.Marshal(workflowDetails)
+		scene.WorkflowDetails = string(workflowDetailsBytes)
+
 		result := database.DB.Create(scene)
 		if result.Error != nil {
 			wp.logger.Error("保存场景到数据库失败", zap.Error(result.Error), zap.String("scene_desc", sceneDesc[:min(len(sceneDesc), 100)]))

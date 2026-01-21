@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/sqlite"
@@ -34,6 +35,12 @@ func InitDB(dbPath string) error {
 	err = migrateDB(newDB)
 	if err != nil {
 		return fmt.Errorf("数据库迁移失败: %v", err)
+	}
+
+	// 确保Scene表包含所有必需的列
+	err = ensureSceneTableColumns(newDB)
+	if err != nil {
+		return fmt.Errorf("确保Scene表列结构失败: %v", err)
 	}
 
 	// 执行提示词模板数据迁移
@@ -93,20 +100,25 @@ func ensureSceneTableColumns(db *gorm.DB) error {
 	// 检查并添加缺失的列，使用 GORM 的 AutoMigrate 来处理 SQLite 的兼容性
 	type TempScene struct {
 		gorm.Model
-		Title            string `gorm:"column:title"`
-		Description      string `gorm:"column:description"`
-		Prompt           string `gorm:"column:prompt"`
-		SegmentationInfo string `gorm:"column:segmentation_info;type:text"`
-		OriginalText     string `gorm:"column:original_text;type:text"`
-		OllamaRequest    string `gorm:"column:ollama_request;type:text"`
-		OllamaResponse   string `gorm:"column:ollama_response;type:text"`
-		DrawThingsConfig string `gorm:"column:draw_things_config;type:text"`
-		DrawThingsResult string `gorm:"column:draw_things_result;type:text"`
-		ChapterID        uint   `gorm:"column:chapter_id;not null"`
-		ImageURL         string `gorm:"column:image_url"`
-		AudioURL         string `gorm:"column:audio_url"`
-		RetryCount       int    `gorm:"column:retry_count;default:0"`
-		Order            int    `gorm:"column:order"`
+		Title            string    `gorm:"column:title"`
+		Description      string    `gorm:"column:description"`
+		Prompt           string    `gorm:"column:prompt"`
+		SegmentationInfo string    `gorm:"column:segmentation_info;type:text"`
+		OriginalText     string    `gorm:"column:original_text;type:text"`
+		OllamaRequest    string    `gorm:"column:ollama_request;type:text"`
+		OllamaResponse   string    `gorm:"column:ollama_response;type:text"`
+		DrawThingsConfig string    `gorm:"column:draw_things_config;type:text"`
+		DrawThingsResult string    `gorm:"column:draw_things_result;type:text"`
+		ChapterID        uint      `gorm:"column:chapter_id;not null"`
+		ImageURL         string    `gorm:"column:image_url"`
+		AudioURL         string    `gorm:"column:audio_url"`
+		RetryCount       int       `gorm:"column:retry_count;default:0"`
+		Order            int       `gorm:"column:order"`
+		// 新增字段
+		WorkflowDetails string    `gorm:"column:workflow_details;type:text"`
+		Status          string    `gorm:"column:status;default:'pending'"`
+		StartTime       time.Time `gorm:"column:start_time"`
+		EndTime         time.Time `gorm:"column:end_time"`
 	}
 
 	// 使用 AutoMigrate 来自动创建或更新表结构
@@ -186,11 +198,11 @@ func DeleteProject(id uint) error {
 // CreateChapter 创建章节
 func CreateChapter(projectID uint, title, content, prompt string) (*Chapter, error) {
 	chapter := &Chapter{
-		Title:       title,
-		Content:     content,
-		Prompt:      prompt,
-		ProjectID:   projectID,
-		ImagePaths:  "[]", // 默认空数组
+		Title:      title,
+		Content:    content,
+		Prompt:     prompt,
+		ProjectID:  projectID,
+		ImagePaths: "[]", // 默认空数组
 	}
 
 	result := DB.Create(chapter)
@@ -316,8 +328,6 @@ func ValidateProjectPassword(projectID uint, password string) (bool, error) {
 	return CheckPasswordHash(password, project.PasswordHash), nil
 }
 
-
-
 // GetAllProjects 获取所有项目
 func GetAllProjects() ([]Project, error) {
 	var projects []Project
@@ -355,6 +365,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：艺术流派 / 设计风格（如扁平化、赛博朋克、悬疑暗黑），决定 "长成什么样"
 3. 细节补充：颜色、光影、构图、材质，提升画面精致度
 4. 氛围渲染：情绪基调（紧张、神秘、冷峻），强化画面感染力
+5. 镜头语言：镜头方向，运镜补充（向前、向后、360度、升降、俯拍、自然抖动、荷兰角倾斜、连续镜头、第一人称、过肩镜头、希区柯克变焦、平挂跟踪），强化画面视角语言
 
 注意事项：
 1. 提示词应该包含丰富的视觉细节，如人物外貌、环境、光线、颜色、构图等
@@ -369,12 +380,12 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 
 图像风格：%s
 
-请严格按照以下四个要素组织提示词：
+请严格按照以下五个要素组织提示词：
 1. 主体描述：
 2. 风格限定：
 3. 细节补充：
 4. 氛围渲染：
-
+5. 镜头语言：
 请只返回中文图像提示词，不要添加任何解释或其他内容。`,
 			StyleAddon:     ", 周围环境模糊成黑影, 空气凝滞,浅景深, 胶片颗粒感, 低饱和度，极致悬疑氛围, 阴沉窒息感, 夏季，环境阴霾，其他部分模糊不可见",
 			NegativePrompt: "人脸特写，半身像，模糊，比例失调，原参考图背景，比例失调，缺肢",
@@ -394,6 +405,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：艺术流派 / 设计风格（如扁平化、水彩、梦幻），决定 "长成什么样"
 3. 细节补充：颜色、光影、构图、材质，提升画面精致度
 4. 氛围渲染：情绪基调（温馨、浪漫、甜蜜），强化画面感染力
+5. 镜头语言：镜头方向，运镜补充（向前、向后、360度、升降、俯拍、自然抖动、荷兰角倾斜、连续镜头、第一人称、过肩镜头、希区柯克变焦、平挂跟踪），强化画面视角语言
 
 注意事项：
 1. 提示词应该包含丰富的视觉细节，如人物外貌、环境、光线、颜色、构图等
@@ -408,12 +420,12 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 
 图像风格：%s
 
-请严格按照以下四个要素组织提示词：
+请严格按照以下五个要素组织提示词：
 1. 主体描述：
 2. 风格限定：
 3. 细节补充：
 4. 氛围渲染：
-
+5. 镜头语言：
 请只返回中文图像提示词，不要添加任何解释或其他内容。`,
 			StyleAddon:     ", 柔和暖色调, 温馨氛围, 柔光, 浅景深, 自然光线, 甜美构图, 和谐色彩搭配",
 			NegativePrompt: "冷色调, 阴暗, 阴郁, 过度曝光, 模糊不清, 比例失调, 畸形",
@@ -433,6 +445,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：艺术流派 / 设计风格（如赛博朋克、未来主义、极简科技），决定 "长成什么样"
 3. 细节补充：颜色、光影、构图、材质，提升画面精致度
 4. 氛围渲染：情绪基调（科技感、未来感、神秘感），强化画面感染力
+5. 镜头语言：镜头方向，运镜补充（向前、向后、360度、升降、俯拍、自然抖动、荷兰角倾斜、连续镜头、第一人称、过肩镜头、希区柯克变焦、平挂跟踪），强化画面视角语言
 
 注意事项：
 1. 提示词应该包含丰富的视觉细节，如人物外貌、环境、光线、颜色、构图等
@@ -447,12 +460,12 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 
 图像风格：%s
 
-请严格按照以下四个要素组织提示词：
+请严格按照以下五个要素组织提示词：
 1. 主体描述：
 2. 风格限定：
 3. 细节补充：
 4. 氛围渲染：
-
+5. 镜头语言：
 请只返回中文图像提示词，不要添加任何解释或其他内容。`,
 			StyleAddon:     ", 霓虹灯光效果, 金属质感, 未来主义建筑, 科技感UI元素, 赛博朋克风格, 发光效果, 高对比度色彩",
 			NegativePrompt: "古旧, 生锈, 过时技术, 暗淡, 传统风格, 低质量纹理",
@@ -472,6 +485,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：艺术流派 / 设计风格（如写实、印象派、自然风光），决定 "长成什么样"
 3. 细节补充：颜色、光影、构图、材质，提升画面精致度
 4. 氛围渲染：情绪基调（宁静、壮丽、和谐），强化画面感染力
+5. 镜头语言：镜头方向，运镜补充（向前、向后、360度、升降、俯拍、自然抖动、荷兰角倾斜、连续镜头、第一人称、过肩镜头、希区柯克变焦、平挂跟踪），强化画面视角语言
 
 注意事项：
 1. 提示词应该包含丰富的视觉细节，如地貌、植被、天空、水域、天气状况等
@@ -486,12 +500,12 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 
 图像风格：%s
 
-请严格按照以下四个要素组织提示词：
+请严格按照以下五个要素组织提示词：
 1. 主体描述：
 2. 风格限定：
 3. 细节补充：
 4. 氛围渲染：
-
+5. 镜头语言：
 请只返回中文图像提示词，不要添加任何解释或其他内容。`,
 			StyleAddon:     ", 自然光线, 高清晰度, 风景摄影构图, 鲜艳色彩, HDR效果, 景深, 专业风光镜头",
 			NegativePrompt: "人工痕迹, 城市污染, 建筑物过多, 模糊, 色彩失真, 低分辨率",
@@ -511,6 +525,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：艺术流派 / 设计风格（如电影感、漫画风、动作片风格），决定 "长成什么样"
 3. 细节补充：颜色、光影、构图、材质，提升画面精致度
 4. 氛围渲染：情绪基调（紧张、刺激、动感），强化画面感染力
+5. 镜头语言：镜头方向，运镜补充（向前、向后、360度、升降、俯拍、自然抖动、荷兰角倾斜、连续镜头、第一人称、过肩镜头、希区柯克变焦、平挂跟踪），强化画面视角语言
 
 注意事项：
 1. 提示词应该包含丰富的视觉细节，如人物姿态、环境、光线、颜色、构图等
@@ -525,12 +540,12 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 
 图像风格：%s
 
-请严格按照以下四个要素组织提示词：
+请严格按照以下五个要素组织提示词：
 1. 主体描述：
 2. 风格限定：
 3. 细节补充：
 4. 氛围渲染：
-
+5. 镜头语言：
 请只返回中文图像提示词，不要添加任何解释或其他内容。`,
 			StyleAddon:     ", 动态模糊, 高对比度, 强烈光影, 电影感构图, 动作镜头, 紧张氛围",
 			NegativePrompt: "静止不动, 柔和色调, 温和光线, 静态构图, 低对比度",
@@ -550,6 +565,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：中国画技法 / 艺术流派（如工笔、写意、泼墨），决定 "如何表现"
 3. 细节补充：笔墨技法、色彩运用、构图布局，体现国画特色
 4. 氛围渲染：意境表达（诗意、禅意、雅致），强化传统文化内涵
+5. 镜头语言：镜头方向，运镜补充（向前、向后、360度、升降、俯拍、自然抖动、荷兰角倾斜、连续镜头、第一人称、过肩镜头、希区柯克变焦、平挂跟踪），强化画面视角语言
 
 注意事项：
 1. 提示词应融入中国画特有的艺术概念，如留白、虚实、疏密、浓淡等
@@ -569,7 +585,7 @@ func runPromptTemplateMigration(db *gorm.DB) error {
 2. 风格限定：
 3. 细节补充：
 4. 氛围渲染：
-
+5. 镜头语言：
 请只返回中文图像提示词，不要添加任何解释或其他内容。`,
 			StyleAddon:     ", 中国水墨风格, 淡雅色彩, 留白构图, 毛笔笔触, 意境深远, 传统国画技法, 墨分五色, 诗情画意, 东方美学",
 			NegativePrompt: "西方油画技法, 现代涂鸦, 数码特效, 过度饱和色彩, 照片写实, 过分细节, 机械绘制痕迹",
