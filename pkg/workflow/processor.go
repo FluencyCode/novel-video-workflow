@@ -9,6 +9,10 @@ import (
 	"novel-video-workflow/pkg/capcut"
 	"novel-video-workflow/pkg/database"
 
+	"encoding/json"
+	"fmt"
+	"time"
+
 	"go.uber.org/zap"
 )
 
@@ -164,4 +168,28 @@ func (p *Processor) GenerateCapcutProject(chapterDir string) error {
 
 func (p *Processor) GetProgress() any {
 	return nil
+}
+
+func (p *Processor) UpdateSceneWithWorkflowDetails(id uint, updates map[string]interface{}) error {
+	// 如果包含workflow_details，需要序列化
+	if workflowDetails, exists := updates["workflow_details"]; exists {
+		if workflowDetailsMap, ok := workflowDetails.(map[string]interface{}); ok {
+			detailsBytes, err := json.Marshal(workflowDetailsMap)
+			if err != nil {
+				p.logger.Error("序列化工作流详细参数失败", zap.Error(err))
+				return fmt.Errorf("序列化工作流详细参数失败: %v", err)
+			}
+			updates["workflow_details"] = string(detailsBytes)
+		}
+	}
+
+	// 如果状态更新为completed或failed，设置结束时间
+	if status, exists := updates["status"].(string); exists {
+		if status == "completed" || status == "failed" {
+			updates["end_time"] = time.Now()
+		}
+	}
+
+	result := database.DB.Model(&database.Scene{}).Where("id = ?", id).Updates(updates)
+	return result.Error
 }
