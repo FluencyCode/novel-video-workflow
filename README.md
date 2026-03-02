@@ -20,7 +20,7 @@ Aegisub客户端下载   <br/>
 
 ## 联系方式
 > - 邮箱：<EMAIL>yuanhaozhuzhu@hotmail.com
-> - qq群： 10339005
+> - qq群： 1053223644
 <div align="center">
 <img src="assets/qrcode_1772414579837.jpg" width="200" alt="芽豆小说剧" title="芽豆小说剧"> 
 </div>
