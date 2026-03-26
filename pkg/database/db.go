@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -13,11 +14,22 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-var DB *gorm.DB
+var (
+	DB            *gorm.DB
+	initDBMu      sync.Mutex
+	currentDBPath string
+)
 
 // CloseDB closes the current shared database connection when one exists.
 func CloseDB() error {
+	initDBMu.Lock()
+	defer initDBMu.Unlock()
+	return closeCurrentDBLocked()
+}
+
+func closeCurrentDBLocked() error {
 	if DB == nil {
+		currentDBPath = ""
 		return nil
 	}
 	sqlDB, err := DB.DB()
@@ -25,19 +37,38 @@ func CloseDB() error {
 		return err
 	}
 	DB = nil
+	currentDBPath = ""
 	return sqlDB.Close()
 }
 
 // InitDB 初始化数据库连接
 func InitDB(dbPath string) error {
+	resolvedPath, err := filepath.Abs(dbPath)
+	if err != nil {
+		return fmt.Errorf("解析数据库路径失败: %v", err)
+	}
+
+	initDBMu.Lock()
+	defer initDBMu.Unlock()
+
+	if DB != nil && currentDBPath == resolvedPath {
+		return nil
+	}
+
+	if DB != nil {
+		if err := closeCurrentDBLocked(); err != nil {
+			return fmt.Errorf("关闭已有数据库连接失败: %v", err)
+		}
+	}
+
 	// 确保数据库目录存在
-	dbDir := filepath.Dir(dbPath)
+	dbDir := filepath.Dir(resolvedPath)
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		return fmt.Errorf("创建数据库目录失败: %v", err)
 	}
 
 	// 打开数据库连接
-	newDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+	newDB, err := gorm.Open(sqlite.Open(resolvedPath), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent), // 设置为静默模式，不输出日志
 	})
 	if err != nil {
@@ -65,6 +96,7 @@ func InitDB(dbPath string) error {
 		fmt.Printf("警告: 系统配置数据迁移失败: %v\n", err)
 	}
 	DB = newDB
+	currentDBPath = resolvedPath
 	return nil
 }
 

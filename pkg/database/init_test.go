@@ -2,6 +2,7 @@ package database
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"gorm.io/gorm"
@@ -60,6 +61,42 @@ func TestInitDB_SupportsMinimalProjectAndChapterCRUD(t *testing.T) {
 	if loaded.ProjectID != project.ID {
 		t.Fatalf("expected project id %d, got %d", project.ID, loaded.ProjectID)
 	}
+}
+
+func TestInitDB_AllowsConcurrentInitializationForSamePath(t *testing.T) {
+	DB = nil
+	dbPath := filepath.Join(t.TempDir(), "shared.sqlite")
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- InitDB(dbPath)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("expected concurrent InitDB to succeed, got %v", err)
+		}
+	}
+
+	if DB == nil {
+		t.Fatal("expected global DB to be initialized")
+	}
+
+	sqlDB, err := DB.DB()
+	if err != nil {
+		t.Fatalf("DB.DB failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+		DB = nil
+	})
 }
 
 func setupTestDB(t *testing.T) *gorm.DB {
