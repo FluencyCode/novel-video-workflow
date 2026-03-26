@@ -91,6 +91,101 @@ func buildWorkflowAPIs(bundle providers.ProviderBundle) (*api_pkg.SystemCheckAPI
 	return api_pkg.NewSystemCheckAPI(bundle), api_pkg.NewWorkflowRunAPI(runExecutor, runStorage)
 }
 
+func registerProcessorBackedRoutes(r *gin.Engine) bool {
+	if mcpServerInstance == nil {
+		log.Printf("MCP 服务未初始化，相关 API 以 503 降级返回")
+		registerUnavailableProcessorRoutes(r)
+		return false
+	}
+
+	processor := mcpServerInstance.GetProcessor()
+	if processor == nil {
+		log.Printf("MCP processor 不可用，相关 API 以 503 降级返回")
+		registerUnavailableProcessorRoutes(r)
+		return false
+	}
+
+	promptTemplateAPI := api_pkg.NewPromptTemplateAPI(processor)
+	r.GET("/api/prompt-templates", promptTemplateAPI.GetPromptTemplates)
+	r.GET("/api/prompt-templates/:id", promptTemplateAPI.GetPromptTemplateByID)
+	r.GET("/api/prompt-templates/category/:category", promptTemplateAPI.GetPromptTemplatesByCategory)
+	r.POST("/api/prompt-templates", promptTemplateAPI.CreatePromptTemplate)
+	r.PUT("/api/prompt-templates/:id", promptTemplateAPI.UpdatePromptTemplate)
+	r.DELETE("/api/prompt-templates/:id", promptTemplateAPI.DeletePromptTemplate)
+
+	workflowTrackingAPI := api_pkg.NewWorkflowTrackingAPI(processor)
+	r.POST("/api/workflow/chapter/record-params", workflowTrackingAPI.RecordChapterWorkflowParams)
+	r.GET("/api/workflow/chapter/:id/params", workflowTrackingAPI.GetChapterWorkflowParams)
+	r.POST("/api/workflow/scene/record-params", workflowTrackingAPI.RecordSceneWorkflowParams)
+	r.GET("/api/workflow/scene/:id/params", workflowTrackingAPI.GetSceneWorkflowParams)
+	r.GET("/api/chapter/:id/scenes", workflowTrackingAPI.GetScenesByChapter)
+
+	systemCheckAPI, workflowRunAPI := buildWorkflowAPIs(processor.GetProviders())
+	systemCheckAPI.RegisterRoutes(r)
+	workflowRunAPI.RegisterRoutes(r)
+	return true
+}
+
+func registerUnavailableProcessorRoutes(r *gin.Engine) {
+	unavailable := func(c *gin.Context) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status":  "error",
+			"message": "MCP processor unavailable",
+		})
+	}
+
+	r.GET("/api/prompt-templates", unavailable)
+	r.GET("/api/prompt-templates/:id", unavailable)
+	r.GET("/api/prompt-templates/category/:category", unavailable)
+	r.POST("/api/prompt-templates", unavailable)
+	r.PUT("/api/prompt-templates/:id", unavailable)
+	r.DELETE("/api/prompt-templates/:id", unavailable)
+
+	r.POST("/api/workflow/chapter/record-params", unavailable)
+	r.GET("/api/workflow/chapter/:id/params", unavailable)
+	r.POST("/api/workflow/scene/record-params", unavailable)
+	r.GET("/api/workflow/scene/:id/params", unavailable)
+	r.GET("/api/chapter/:id/scenes", unavailable)
+
+	r.GET("/api/system/check", unavailable)
+	r.POST("/api/workflow/runs", unavailable)
+	r.GET("/api/workflow/runs/:id", unavailable)
+}
+
+func isAllowedProjectPath(cleanPath, projectRoot string) bool {
+	allowedPrefixes := []string{
+		filepath.Join(projectRoot, "input"),
+		filepath.Join(projectRoot, "output"),
+	}
+
+	for _, prefix := range allowedPrefixes {
+		if cleanPath == prefix {
+			return true
+		}
+		if strings.HasPrefix(cleanPath, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func extractToolParams(reqBody map[string]interface{}) map[string]interface{} {
+	if params, ok := reqBody["params"].(map[string]interface{}); ok {
+		return params
+	}
+
+	params := make(map[string]interface{}, len(reqBody))
+	for key, value := range reqBody {
+		if key == "toolName" || key == "params" {
+			continue
+		}
+		params[key] = value
+	}
+
+	return params
+}
+
 // 启动MCP服务器
 func startMCPServer() error {
 	// 创建logger
@@ -456,10 +551,7 @@ func apiExecuteHandler(c *gin.Context) {
 					var err error
 
 					// 为其他工具传递参数
-					params, ok := reqBody["params"].(map[string]interface{})
-					if !ok {
-						params = make(map[string]interface{})
-					}
+					params := extractToolParams(reqBody)
 
 					// 这里需要根据工具名称调用相应的处理函数
 					switch toolName {
@@ -843,17 +935,8 @@ func fileListHandler(c *gin.Context) {
 	// 确保路径安全，防止路径遍历攻击
 	cleanDir := filepath.Clean(dir)
 
-	// 构建允许的路径前缀
-	allowedInputPrefix := filepath.Join(projectRoot, "input")
-	allowedOutputPrefix := filepath.Join(projectRoot, "output")
-
 	// 检查路径是否在允许的范围内
-	isValidPath := strings.HasPrefix(cleanDir, allowedInputPrefix+"/") ||
-		strings.HasPrefix(cleanDir, allowedOutputPrefix+"/") ||
-		cleanDir == allowedInputPrefix ||
-		cleanDir == allowedOutputPrefix
-
-	if !isValidPath {
+	if !isAllowedProjectPath(cleanDir, projectRoot) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied", "status": "error"})
 		return
 	}
@@ -934,17 +1017,8 @@ func fileContentHandler(c *gin.Context) {
 	// 确保路径安全，防止路径遍历攻击
 	cleanPath = filepath.Clean(cleanPath)
 
-	// 构建允许的路径前缀
-	allowedInputPrefix := filepath.Join(projectRoot, "input")
-	allowedOutputPrefix := filepath.Join(projectRoot, "output")
-
 	// 检查路径是否在允许的范围内
-	isValidPath := strings.HasPrefix(cleanPath, allowedInputPrefix+"/") ||
-		strings.HasPrefix(cleanPath, allowedOutputPrefix+"/") ||
-		cleanPath == allowedInputPrefix ||
-		cleanPath == allowedOutputPrefix
-
-	if !isValidPath {
+	if !isAllowedProjectPath(cleanPath, projectRoot) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied", "status": "error"})
 		return
 	}
@@ -1025,17 +1099,8 @@ func fileDeleteHandler(c *gin.Context) {
 	// 确保路径安全，防止路径遍历攻击
 	cleanPath = filepath.Clean(cleanPath)
 
-	// 构建允许的路径前缀
-	allowedInputPrefix := filepath.Join(projectRoot, "input")
-	allowedOutputPrefix := filepath.Join(projectRoot, "output")
-
 	// 检查路径是否在允许的范围内
-	isValidPath := strings.HasPrefix(cleanPath, allowedInputPrefix+"/") ||
-		strings.HasPrefix(cleanPath, allowedOutputPrefix+"/") ||
-		cleanPath == allowedInputPrefix ||
-		cleanPath == allowedOutputPrefix
-
-	if !isValidPath {
+	if !isAllowedProjectPath(cleanPath, projectRoot) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied", "status": "error"})
 		return
 	}
@@ -1293,26 +1358,8 @@ func webServerMain() {
 	// 添加CapCut项目生成API端点
 	r.GET("/api/capcut-project", capcutProjectHandler)
 
-	// 提示词模板相关路由
-	promptTemplateAPI := api_pkg.NewPromptTemplateAPI(mcpServerInstance.GetProcessor())
-	r.GET("/api/prompt-templates", promptTemplateAPI.GetPromptTemplates)
-	r.GET("/api/prompt-templates/:id", promptTemplateAPI.GetPromptTemplateByID)
-	r.GET("/api/prompt-templates/category/:category", promptTemplateAPI.GetPromptTemplatesByCategory)
-	r.POST("/api/prompt-templates", promptTemplateAPI.CreatePromptTemplate)
-	r.PUT("/api/prompt-templates/:id", promptTemplateAPI.UpdatePromptTemplate)
-	r.DELETE("/api/prompt-templates/:id", promptTemplateAPI.DeletePromptTemplate)
-
-	// 工作流跟踪相关路由
-	workflowTrackingAPI := api_pkg.NewWorkflowTrackingAPI(mcpServerInstance.GetProcessor())
-	r.POST("/api/workflow/chapter/record-params", workflowTrackingAPI.RecordChapterWorkflowParams)
-	r.GET("/api/workflow/chapter/:id/params", workflowTrackingAPI.GetChapterWorkflowParams)
-	r.POST("/api/workflow/scene/record-params", workflowTrackingAPI.RecordSceneWorkflowParams)
-	r.GET("/api/workflow/scene/:id/params", workflowTrackingAPI.GetSceneWorkflowParams)
-	r.GET("/api/chapter/:id/scenes", workflowTrackingAPI.GetScenesByChapter)
-
-	systemCheckAPI, workflowRunAPI := buildWorkflowAPIs(mcpServerInstance.GetProcessor().GetProviders())
-	systemCheckAPI.RegisterRoutes(r)
-	workflowRunAPI.RegisterRoutes(r)
+	// 提示词模板、工作流跟踪、系统检查与工作流运行等依赖 processor 的路由
+	registerProcessorBackedRoutes(r)
 
 	// 章节和场景管理相关路由
 	chapterSceneAPI := api_pkg.NewChapterSceneAPI()
@@ -2163,17 +2210,8 @@ func capcutProjectHandler(c *gin.Context) {
 	// 确保路径安全，防止路径遍历攻击
 	cleanPath := filepath.Clean(actualPath)
 
-	// 构建允许的路径前缀
-	allowedInputPrefix := filepath.Join(projectRoot, "input")
-	allowedOutputPrefix := filepath.Join(projectRoot, "output")
-
 	// 检查路径是否在允许的范围内
-	isValidPath := strings.HasPrefix(cleanPath, allowedInputPrefix+"/") ||
-		strings.HasPrefix(cleanPath, allowedOutputPrefix+"/") ||
-		cleanPath == allowedInputPrefix ||
-		cleanPath == allowedOutputPrefix
-
-	if !isValidPath {
+	if !isAllowedProjectPath(cleanPath, projectRoot) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied", "status": "error"})
 		return
 	}

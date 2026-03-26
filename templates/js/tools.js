@@ -105,8 +105,75 @@ function loadToolsList() {
                         '</button>' +
                         '</div>' +
                         '</div>';
+                } else if (tool.name === 'file_split_novel_into_chapters') {
+                    cardContent = '<div class="tool-header text-center">' +
+                        '<div class="flex flex-col items-center">' +
+                        '<div class="w-20 h-20 bg-amber-500 bg-opacity-20 rounded-full flex items-center justify-center mb-4">' +
+                        '<i class="' + iconClass + ' text-amber-300 text-2xl"></i>' +
+                        '</div>' +
+                        '<h3 class="text-xl font-bold text-white mb-3">' + tool.name + '</h3>' +
+                        '<p class="text-lg text-gray-300 mb-6">' + tool.description + '</p>' +
+                        '<button onclick="toggleSplitForm(\'' + tool.name + '\')" class="w-full bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white py-3 px-4 rounded-xl transition-all duration-200 future-glow text-lg">' +
+                        '执行工具' +
+                        '</button>' +
+                        '</div>' +
+                        '</div>' +
+                        '<div id="form_' + tool.name + '" class="audio-tool-form mt-6 p-6 glass-effect rounded-xl border border-white border-opacity-20 hidden">' +
+                        '<div class="form-group mb-6">' +
+                        '<label class="block text-lg font-bold text-gray-300 mb-3">小说文件路径:</label>' +
+                        '<input type="text" id="novelPath_' + tool.name + '" value="./input/novel.txt" placeholder="请输入待拆分小说路径" class="w-full px-4 py-3 bg-black bg-opacity-30 text-white border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-lg">' +
+                        '</div>' +
+                        '<div class="flex flex-wrap gap-4">' +
+                        '<button onclick="executeSplitTool(\'' + tool.name + '\')" class="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white px-6 py-3 rounded-lg transition-all duration-200 future-glow text-lg">' +
+                        '拆分章节' +
+                        '</button>' +
+                        '<button onclick="hideSplitForm(\'' + tool.name + '\')" class="bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white px-6 py-3 rounded-lg transition-all duration-200 future-glow text-lg">' +
+                        '取消' +
+                        '</button>' +
+                        '</div>' +
+                        '</div>';
+                } else if (tool.name === 'generate_image_from_text') {
+                    cardContent = '<div class="tool-header text-center">' +
+                        '<div class="flex flex-col items-center">' +
+                        '<div class="w-20 h-20 bg-emerald-500 bg-opacity-20 rounded-full flex items-center justify-center mb-4">' +
+                        '<i class="' + iconClass + ' text-emerald-300 text-2xl"></i>' +
+                        '</div>' +
+                        '<h3 class="text-xl font-bold text-white mb-3">' + tool.name + '</h3>' +
+                        '<p class="text-lg text-gray-300 mb-6">' + tool.description + '</p>' +
+                        '<button onclick="toggleTextToImageForm(\'' + tool.name + '\')" class="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white py-3 px-4 rounded-xl transition-all duration-200 future-glow text-lg">' +
+                        '执行工具' +
+                        '</button>' +
+                        '</div>' +
+                        '</div>' +
+                        '<div id="form_' + tool.name + '" class="audio-tool-form mt-6 p-6 glass-effect rounded-xl border border-white border-opacity-20 hidden">' +
+                        '<div class="form-group mb-6">' +
+                        '<label class="block text-lg font-bold text-gray-300 mb-3">图像描述文本:</label>' +
+                        '<textarea id="textPrompt_' + tool.name + '" placeholder="请输入图像描述文本" rows="4" class="w-full px-4 py-3 bg-black bg-opacity-30 text-white border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-lg"></textarea>' +
+                        '</div>' +
+                        '<div class="form-group mb-6">' +
+                        '<label class="block text-lg font-bold text-gray-300 mb-3">输出文件:</label>' +
+                        '<input type="text" id="outputFile_' + tool.name + '" value="./output/image_" placeholder="请输入输出文件前缀" class="w-full px-4 py-3 bg-black bg-opacity-30 text-white border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-lg">' +
+                        '</div>' +
+                        '<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">' +
+                        '<div class="form-group">' +
+                        '<label class="block text-lg font-bold text-gray-300 mb-3">图像宽度:</label>' +
+                        '<input type="number" id="imageWidth_' + tool.name + '" value="512" min="256" max="2048" class="w-full px-4 py-3 bg-black bg-opacity-30 text-white border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-lg">' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                        '<label class="block text-lg font-bold text-gray-300 mb-3">图像高度:</label>' +
+                        '<input type="number" id="imageHeight_' + tool.name + '" value="896" min="256" max="2048" class="w-full px-4 py-3 bg-black bg-opacity-30 text-white border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-lg">' +
+                        '</div>' +
+                        '</div>' +
+                        '<div class="flex flex-wrap gap-4">' +
+                        '<button onclick="executeTextToImageTool(\'' + tool.name + '\')" class="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-6 py-3 rounded-lg transition-all duration-200 future-glow text-lg">' +
+                        '生成图像' +
+                        '</button>' +
+                        '<button onclick="hideTextToImageForm(\'' + tool.name + '\')" class="bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white px-6 py-3 rounded-lg transition-all duration-200 future-glow text-lg">' +
+                        '取消' +
+                        '</button>' +
+                        '</div>' +
+                        '</div>';
                 } else if (tool.name === 'generate_image_from_lyric_ai_prompt') {
-                    console.log('generate_image_from_lyric_ai_prompt')
                     // 为歌词MV生成工具添加表单
                     cardContent = '<div class="tool-header text-center">' +
                         '<div class="flex flex-col items-center">' +
@@ -214,7 +281,13 @@ function executeLyricTool(toolName) {
         },
         body: JSON.stringify(params)
     })
-        .then(response => response.json())
+        .then(async response => {
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || '歌词工具启动失败');
+            }
+            return data;
+        })
         .then(data => {
             console.log('Lyric tool execution initiated:', data);
             // 隐藏表单
@@ -297,6 +370,125 @@ function executeTool(toolName) {
     })
     .catch(error => {
         console.error('Error executing tool:', error);
+    });
+}
+
+function toggleSplitForm(toolName) {
+    const form = document.getElementById('form_' + toolName);
+    if (form) {
+        form.classList.toggle('hidden');
+    }
+}
+
+function hideSplitForm(toolName) {
+    const form = document.getElementById('form_' + toolName);
+    if (form) {
+        form.classList.add('hidden');
+    }
+}
+
+function executeSplitTool(toolName) {
+    const novelPath = document.getElementById('novelPath_' + toolName).value;
+
+    if (!novelPath || novelPath.trim() === '') {
+        alert('请输入待拆分的小说文件路径');
+        return;
+    }
+
+    fetch('/api/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            toolName: toolName,
+            novel_path: novelPath.trim()
+        })
+    })
+    .then(async response => {
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || '拆分工具启动失败');
+        }
+        return data;
+    })
+    .then(data => {
+        console.log('Split tool execution initiated:', data);
+        hideSplitForm(toolName);
+        showNotification('章节拆分已启动，请在控制台查看进度', 'success');
+    })
+    .catch(error => {
+        console.error('Error executing split tool:', error);
+        showNotification('执行拆分工具时出错: ' + error.message, 'error');
+    });
+}
+
+function toggleTextToImageForm(toolName) {
+    const form = document.getElementById('form_' + toolName);
+    if (form) {
+        form.classList.toggle('hidden');
+    }
+}
+
+function hideTextToImageForm(toolName) {
+    const form = document.getElementById('form_' + toolName);
+    if (form) {
+        form.classList.add('hidden');
+    }
+}
+
+function executeTextToImageTool(toolName) {
+    const textPrompt = document.getElementById('textPrompt_' + toolName).value;
+    const outputPrefix = document.getElementById('outputFile_' + toolName).value;
+    const imageWidth = parseInt(document.getElementById('imageWidth_' + toolName).value);
+    const imageHeight = parseInt(document.getElementById('imageHeight_' + toolName).value);
+
+    if (!textPrompt || textPrompt.trim() === '') {
+        alert('请输入图像描述文本');
+        return;
+    }
+
+    if (!outputPrefix || outputPrefix.trim() === '') {
+        alert('请输入输出文件前缀');
+        return;
+    }
+
+    if (!Number.isFinite(imageWidth) || !Number.isFinite(imageHeight)) {
+        alert('请输入有效的图像宽高');
+        return;
+    }
+
+    const timestamp = new Date().getTime();
+    const outputFile = outputPrefix.trim() + timestamp + '.png';
+
+    fetch('/api/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            toolName: toolName,
+            text: textPrompt.trim(),
+            output_file: outputFile,
+            width: imageWidth,
+            height: imageHeight
+        })
+    })
+    .then(async response => {
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || '文生图任务启动失败');
+        }
+        return data;
+    })
+    .then(data => {
+        console.log('Text-to-image tool execution initiated:', data);
+        hideTextToImageForm(toolName);
+        showNotification('文生图任务已启动，请在控制台查看进度', 'success');
+    })
+    .catch(error => {
+        console.error('Error executing text-to-image tool:', error);
+        showNotification('执行文生图工具时出错: ' + error.message, 'error');
     });
 }
 
